@@ -22,6 +22,9 @@
     .controls-area { display:flex; gap:.5rem; align-items:center; }
     .empty-state { height:62vh; display:flex; align-items:center; justify-content:center; color:#6c757d; }
     .btn-sm-icon { padding:.25rem .5rem; font-size:.85rem; }
+    /* Progress area styles */
+    #indexProgress { margin-bottom: 0.75rem; min-height: 2rem; }
+    .progress-info { font-size: .95rem; color: #333; display:flex; align-items:center; gap: 0.5rem; }
   </style>
 </head>
 <body>
@@ -54,7 +57,7 @@
             {% if analyses %}
               <ul class="list-group list-group-flush">
                 {% for a in analyses %}
-                  <li class="list-group-item d-flex justify-content-between align-items-start">
+                  <li class="list-group-item d-flex justify-content-between align-items-start analysis-item" data-analysis-id="{{ a.id }}">
                     <div class="ms-2 me-auto">
                       <div class="fw-bold">{{ a.name }} — ID: {{ a.id }}</div>
                       <div class="small text-muted">{{ a.path }} — <em>{{ a.created_at }}</em></div>
@@ -95,6 +98,11 @@
                 <label class="small mb-0 me-2">Analysis ID</label>
                 <input type="number" id="analysis_id" class="form-control form-control-sm" value="{{ analyses[0].id if analyses else '' }}" style="width:8rem;">
               </div>
+            </div>
+
+            <!-- Indexing verification / progress area (English) -->
+            <div id="indexProgress" class="mb-2" aria-live="polite">
+              <span class="text-muted">Indexing status not available.</span>
             </div>
 
             <div id="chatWindow" class="chat-window mb-3" aria-live="polite"></div>
@@ -370,6 +378,84 @@
       renderChat();
     }
 
+    // --- Analysis status polling and UI update (English text) ---
+    const POLL_INTERVAL = 5000;
+
+    async function fetchAnalysesStatus(){
+      try{
+        const resp = await fetch("/analyses/status");
+        if(!resp.ok) return null;
+        return await resp.json();
+      } catch(e){
+        console.warn("Failed to fetch analyses status:", e);
+        return null;
+      }
+    }
+
+    function updateAnalysesListUI(analyses){
+      document.querySelectorAll(".analysis-item").forEach(li => {
+        const aid = parseInt(li.getAttribute("data-analysis-id"));
+        const a = (analyses || []).find(x => x.id === aid);
+        if(a){
+          // update badge and counts in the left list (if present)
+          const statusBadge = li.querySelector(".badge");
+          if(statusBadge){
+            statusBadge.textContent = a.status;
+          }
+          const fileCountSpan = li.querySelector(".text-muted");
+          // we won't try to be too invasive; ensure the left panel reflects counts by reloading page for complex updates
+        }
+      });
+    }
+
+    function renderProgressForSelectedAnalysis(analyses){
+      const aidInput = document.getElementById("analysis_id");
+      const out = document.getElementById("indexProgress");
+      if(!aidInput || !out) return;
+      const aid = parseInt(aidInput.value || 0) || null;
+      if(!aid){
+        out.innerHTML = '<span class="text-muted">Select an Analysis ID to view progress.</span>';
+        return;
+      }
+      const a = (analyses || []).find(x => x.id === aid);
+      if(!a){
+        out.innerHTML = '<span class="text-muted">Analysis not found.</span>';
+        return;
+      }
+
+      if(a.status === "running"){
+        const fc = a.file_count || 0;
+        const ec = a.embedding_count || 0;
+        out.innerHTML = `<div class="progress-info"><strong>Indexing in progress</strong> — ${fc} files processed <small class="text-muted">(${ec} embeddings)</small><div class="spinner-small ms-2" aria-hidden="true"></div></div>`;
+      } else if(a.status === "pending"){
+        out.innerHTML = `<span class="text-muted">Analysis queued (status: ${a.status}).</span>`;
+      } else if(a.status === "completed"){
+        out.innerHTML = `<span class="text-success">Indexing completed — ${a.file_count || 0} files processed, ${a.embedding_count || 0} embeddings.</span>`;
+      } else if(a.status === "failed"){
+        out.innerHTML = `<span class="text-danger">Indexing failed.</span>`;
+      } else {
+        out.innerHTML = `<span class="text-muted">Status: ${a.status} — ${a.file_count || 0} files processed.</span>`;
+      }
+    }
+
+    let _pollHandle = null;
+    async function startPolling(){
+      const analyses = await fetchAnalysesStatus();
+      if(analyses){
+        updateAnalysesListUI(analyses);
+        renderProgressForSelectedAnalysis(analyses);
+      }
+      if(_pollHandle) clearInterval(_pollHandle);
+      _pollHandle = setInterval(async () => {
+        const analyses = await fetchAnalysesStatus();
+        if(analyses){
+          updateAnalysesListUI(analyses);
+          renderProgressForSelectedAnalysis(analyses);
+        }
+      }, POLL_INTERVAL);
+    }
+
+    // --- Search only: show results in chat window (transient) ---
     async function searchOnly(){
       const text = document.getElementById("chatInput").value.trim();
       if(!text) return;
@@ -377,11 +463,11 @@
       const top_k = parseInt(document.getElementById("top_k").value || 5);
       try{
         const win = document.getElementById("chatWindow");
-        // clear previous transient search results (keep history preserved)
         const header = document.createElement("div");
         header.className = "mb-2 muted-small";
         header.textContent = "Search results";
         win.appendChild(header);
+
         const resp = await fetch("/search", {
           method: "POST",
           headers: { "Content-Type":"application/json" },
@@ -401,7 +487,9 @@
           data.forEach(d=>{
             const item = document.createElement("div");
             item.className = "card mb-2 p-2";
-            item.innerHTML = `<div class="small"><strong>${DOMPurify.sanitize(d.path)}</strong></div><div class="muted-small">score: ${d.score !== undefined && d.score !== null ? parseFloat(d.score).toFixed(4) : "n/a"}</div>`;
+            const path = DOMPurify.sanitize(d.path || "(unknown)");
+            const score = (d.score !== undefined && d.score !== null) ? Number(d.score).toFixed(4) : "n/a";
+            item.innerHTML = `<div class="small"><strong>${path}</strong></div><div class="muted-small">score: ${score}</div>`;
             win.appendChild(item);
           });
         } else {
@@ -421,17 +509,28 @@
       }
     }
 
-    document.getElementById("sendBtn").addEventListener("click", sendMessage);
-    document.getElementById("clearBtn").addEventListener("click", clearHistory);
-    document.getElementById("searchBtn").addEventListener("click", searchOnly);
-    document.getElementById("chatInput").addEventListener("keydown", function(e){
-      if(e.key === "Enter" && !e.shiftKey){
-        e.preventDefault();
-        sendMessage();
-      }
-    });
+    // Wire up event handlers after DOM loaded
+    window.addEventListener("load", () => {
+      document.getElementById("sendBtn").addEventListener("click", sendMessage);
+      document.getElementById("clearBtn").addEventListener("click", clearHistory);
+      document.getElementById("searchBtn").addEventListener("click", searchOnly);
+      document.getElementById("chatInput").addEventListener("keydown", function(e){
+        if(e.key === "Enter" && !e.shiftKey){
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+      // click on analysis items sets analysis id
+      document.querySelectorAll(".analysis-item").forEach(li=>{
+        li.addEventListener("click", ()=>{
+          const aid = li.getAttribute("data-analysis-id");
+          document.getElementById("analysis_id").value = aid;
+        });
+      });
 
-    renderChat();
+      renderChat();
+      startPolling();
+    });
   </script>
 </body>
 </html>

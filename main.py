@@ -44,6 +44,15 @@ def analyses_status():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/analyses/{analysis_id}/delete")
+def delete_analysis_endpoint(analysis_id: int):
+    try:
+        delete_analysis(DATABASE, analysis_id)
+        return JSONResponse({"deleted": True})
+    except Exception as e:
+        return JSONResponse({"deleted": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/analyze")
 def analyze(background_tasks: BackgroundTasks):
     local_path = CFG.get("local_path")
