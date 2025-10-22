@@ -187,6 +187,11 @@
           const spinner = document.createElement("div");
           spinner.className = "spinner-small ms-2";
           rightMeta.appendChild(spinner);
+        } else if(msg.status === "deleted"){
+          const delTag = document.createElement("span");
+          delTag.className = "text-muted small ms-2";
+          delTag.textContent = "deleted";
+          rightMeta.appendChild(delTag);
         } else if(msg.status === "error"){
           const err = document.createElement("span");
           err.className = "text-danger small ms-2";
@@ -200,11 +205,17 @@
         regenBtn.title = "Regenerate";
         regenBtn.textContent = "Regenerate";
         regenBtn.addEventListener("click", ()=>regenerateMessage(msg.id));
+
         const delBtn = document.createElement("button");
         delBtn.className = "btn btn-outline-danger btn-sm btn-sm-icon";
-        delBtn.title = "Delete";
-        delBtn.textContent = "Delete";
-        delBtn.addEventListener("click", ()=>deleteMessage(msg.id));
+        delBtn.title = msg.status === "deleted" ? "Remove permanently" : "Delete";
+        delBtn.textContent = msg.status === "deleted" ? "Remove" : "Delete";
+        // soft-delete versus permanent removal
+        if(msg.status === "deleted"){
+          delBtn.addEventListener("click", ()=>permanentDeleteMessage(msg.id));
+        } else {
+          delBtn.addEventListener("click", ()=>softDeleteMessage(msg.id));
+        }
         actions.appendChild(regenBtn);
         actions.appendChild(delBtn);
         rightMeta.appendChild(actions);
@@ -216,8 +227,13 @@
       const content = document.createElement("div");
       content.className = "content";
       if(msg.role === "assistant"){
-        const md = typeof msg.text === "string" ? msg.text : JSON.stringify(msg.text, null, 2);
-        content.innerHTML = renderMarkdown(md);
+        if(msg.status === "deleted"){
+          content.textContent = "(deleted)";
+          content.className = "content text-muted fst-italic";
+        } else {
+          const md = typeof msg.text === "string" ? msg.text : JSON.stringify(msg.text, null, 2);
+          content.innerHTML = renderMarkdown(md);
+        }
       } else {
         content.textContent = msg.text || "";
       }
@@ -325,14 +341,27 @@
       if(!msg) return;
       const userMsg = arr.find(m=>m.id===msg.replyTo);
       if(!userMsg) return;
+      // mark pending and clear previous used_context
       updateMessage(assistantId, { status: "pending", text: "", used_context: [] });
       await callModel(userMsg, assistantId);
     }
 
-    function deleteMessage(assistantId){
+    // Soft-delete: keep message so regeneration can still find replyTo and id.
+    function softDeleteMessage(assistantId){
+      updateMessage(assistantId, { status: "deleted", text: "", used_context: [] });
+    }
+
+    // Permanent removal from history
+    function permanentDeleteMessage(assistantId){
       const arr = loadHistory().filter(m=>m.id!==assistantId);
       saveHistory(arr);
       renderChat();
+    }
+
+    // Backwards compatibility: keep function name if something else calls deleteMessage
+    function deleteMessage(assistantId){
+      // default to soft-delete to preserve regenerate behavior
+      softDeleteMessage(assistantId);
     }
 
     function clearHistory(){

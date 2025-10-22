@@ -29,18 +29,20 @@ First step: Example .env (copy `.env.example` -> `.env` and edit)
 - Follow Astral uv installation instructions first: https://docs.astral.sh/uv/
 - Typical flow (after `uv` is installed and you are in the project directory):
 
-  # create and install dependencies from pyproject.toml using uv
+```
 
   uv pip install -r pyproject.toml
 
   uv run python ./main.py
+```
 
 Notes:
 - The exact `uv` subcommands depend on the uv version/configuration. Check the Astral uv docs for the exact syntax for your uv CLI release. The analyzer only needs a Python executable in the venv to run `python -m pip list --format=json`; `uv` typically provides or creates that venv.
 
 ### Using plain virtualenv / pip (fallback)
-- Create a virtual environment and install dependencies listed in `pyproject.toml` with your preferred tool.
 
+- Create a virtual environment and install dependencies listed in `pyproject.toml` with your preferred tool.
+```
   # create venv
   python -m venv .venv
 
@@ -54,10 +56,11 @@ Notes:
 
   # run the server
   python ./main.py
+```
 
 ### Using Poetry
 
-- If your workflow is Poetry-based:
-
+```
   poetry install
   poetry run uvicorn main:app --reload
+```
