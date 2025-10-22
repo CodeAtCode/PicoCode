@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from contextlib import asynccontextmanager
 import os
 import json
 import uvicorn
@@ -15,22 +16,33 @@ DATABASE = CFG.get("database_path", "codebase.db")
 MAX_FILE_SIZE = int(CFG.get("max_file_size", 200000))
 
 # Controls how many characters of each snippet and total context we send to coding model
-# Since user requested "non uso gli snippet", we will NOT include snippets in context.
 TOTAL_CONTEXT_LIMIT = 4000
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db(DATABASE)
+    yield
+
+app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.on_event("startup")
-def startup():
-    init_db(DATABASE)
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     analyses = list_analyses(DATABASE)
     return templates.TemplateResponse("index.html", {"request": request, "analyses": analyses, "config": CFG})
+
+
+@app.get("/analyses/status")
+def analyses_status():
+    try:
+        analyses = list_analyses(DATABASE)
+        return JSONResponse(analyses)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 
 @app.post("/analyze")
 def analyze(background_tasks: BackgroundTasks):
@@ -41,38 +53,21 @@ def analyze(background_tasks: BackgroundTasks):
     background_tasks.add_task(analyze_local_path_background, local_path, DATABASE, venv_path, MAX_FILE_SIZE, CFG)
     return RedirectResponse(url="/", status_code=303)
 
-@app.post("/analysis/{analysis_id}/delete")
-def delete_analysis_endpoint(analysis_id: int):
-    try:
-        delete_analysis(DATABASE, analysis_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete analysis: {e}")
-    return RedirectResponse(url="/", status_code=303)
-
-@app.post("/search")
-def search(payload: dict):
-    if not payload or "query" not in payload or "analysis_id" not in payload:
-        return JSONResponse({"error": "query and analysis_id required"}, status_code=400)
-    query = payload["query"]
-    analysis_id = int(payload["analysis_id"])
-    top_k = int(payload.get("top_k", 5))
-    results = search_semantic(query, DATABASE, analysis_id=analysis_id, top_k=top_k)
-    return JSONResponse(results)
 
 @app.post("/code")
-def code(payload: dict):
-    """
-    payload:
-      {
-        "prompt": "...",
-        "context": "...",            # optional explicit context (client-provided)
-        "use_rag": true|false,      # whether to perform retrieval and include it as context
-        "analysis_id": <int|null>,   # analysis to search against if use_rag is true
-        "top_k": <int>              # how many retrieved docs to include
-      }
-    """
+def code_endpoint(request: Request):
+    payload = None
+    try:
+        payload = request.json()
+    except Exception:
+        try:
+            payload = json.loads(request.body().decode("utf-8"))
+        except Exception:
+            payload = None
+
     if not payload or "prompt" not in payload:
         return JSONResponse({"error": "prompt required"}, status_code=400)
+
     prompt = payload["prompt"]
     explicit_context = payload.get("context", "") or ""
     use_rag = bool(payload.get("use_rag", True))
@@ -116,10 +111,15 @@ def code(payload: dict):
 
     return JSONResponse({"response": resp, "used_context": used_context})
 
-if __name__ == "__main__":
-    host = CFG.get("uvicorn_host", "127.0.0.1")
+
+@app.post("/analyses/{analysis_id}/delete")
+def delete_analysis_endpoint(analysis_id: int):
     try:
-        port = int(CFG.get("uvicorn_port", 8000))
-    except Exception:
-        port = 8000
-    uvicorn.run("main:app", host=host, port=port, reload=True)
+        delete_analysis(DATABASE, analysis_id)
+        return JSONResponse({"deleted": True})
+    except Exception as e:
+        return JSONResponse({"deleted": False, "error": str(e)}, status_code=500)
+
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host=CFG.get("uvicorn_host", "127.0.0.1"), port=int(CFG.get("uvicorn_port", 8000)), reload=True)

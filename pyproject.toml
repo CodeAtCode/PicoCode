@@ -13,6 +13,8 @@ dependencies = [
   "tomli>=2.0; python_version < '3.11'",
   "python-dotenv>=1.0",
   "openai>=2.2.0",
+  "llama-index>=0.5.9",
+  "sqliteai-vector>=0.9.51",
 ]
 
 [build-system]

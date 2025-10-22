@@ -9,7 +9,7 @@ This tool is a way to achieve this!
 
 ## Overview
 
-- Indexes files, computes embeddings using an OpenAI-compatible embedding endpoint, stores data in SQLite.
+- Indexes files, computes embeddings using an OpenAI-compatible embedding endpoint, stores data in SQLite (with SQlite-vector).
 - Reads dependencies by running `python -m pip list --format=json` inside a virtualenv when available.
 - Detects Astral "uv" usage (https://docs.astral.sh/uv/) by inspecting `pyproject.toml` and/or installed packages in a venv; if uv is detected it tries to locate a venv managed by uv and uses it for `pip list`.
 - Analysis runs asynchronously (FastAPI BackgroundTasks) so the UI remains responsive.
@@ -30,7 +30,6 @@ First step: Example .env (copy `.env.example` -> `.env` and edit)
 - Typical flow (after `uv` is installed and you are in the project directory):
 
 ```
-
   uv pip install -r pyproject.toml
 
   uv run python ./main.py
@@ -42,6 +41,7 @@ Notes:
 ### Using plain virtualenv / pip (fallback)
 
 - Create a virtual environment and install dependencies listed in `pyproject.toml` with your preferred tool.
+- 
 ```
   # create venv
   python -m venv .venv
@@ -62,5 +62,5 @@ Notes:
 
 ```
   poetry install
-  poetry run uvicorn main:app --reload
+  poetry run main.py
 ```

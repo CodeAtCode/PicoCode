@@ -1,241 +1,253 @@
+import os
 import sqlite3
 import json
-import threading
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS analyses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    path TEXT,
-    status TEXT DEFAULT 'pending',
-    file_count INTEGER DEFAULT 0,
-    embedding_count INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS files (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    analysis_id INTEGER,
-    path TEXT,
-    content TEXT,
-    language TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS embeddings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_id INTEGER,
-    vector TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-"""
-
-# Module-level registry so repeated calls with the same database_path return the same Database instance.
-_DB_INSTANCES: Dict[str, "Database"] = {}
-_DB_INSTANCES_LOCK = threading.Lock()
+# Simple connection helper: we open new connections per operation so the code is robust
+# across threads. We set WAL journal mode for safer concurrency.
+def _get_connection(db_path: str) -> sqlite3.Connection:
+    dirname = os.path.dirname(os.path.abspath(db_path))
+    if dirname and not os.path.isdir(dirname):
+        os.makedirs(dirname, exist_ok=True)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode = WAL;")
+    except Exception:
+        # Not fatal — continue
+        pass
+    return conn
 
 
-class Database:
-    """
-    Lightweight wrapper around sqlite3.Connection that keeps a persistent connection open,
-    is safe for multi-threaded use (via an internal lock), and exposes convenience methods
-    for common queries used in the original module.
-
-    Use get_database(database_path) to obtain a singleton instance per path.
-    """
-
-    def __init__(self, database_path: str, timeout: float = 30.0, check_same_thread: bool = False):
-        # check_same_thread=False allows using the connection from multiple threads,
-        # but we enforce safety with _lock anyway.
-        self.path = database_path
-        self._lock = threading.RLock()
-        self.conn = sqlite3.connect(database_path, timeout=timeout, check_same_thread=check_same_thread)
-        self.conn.row_factory = sqlite3.Row
-        # Optimize SQLite for concurrent reads/writes
-        with self._lock:
-            self.conn.execute("PRAGMA journal_mode=WAL;")
-            self.conn.execute("PRAGMA synchronous=NORMAL;")
-            self.conn.execute("PRAGMA foreign_keys=ON;")
-            self.conn.commit()
-
-    def init_db(self) -> None:
-        """Create schema if it doesn't exist."""
-        with self._lock:
-            self.conn.executescript(SCHEMA)
-            self.conn.commit()
-
-    def execute(self, sql: str, params: tuple = (), commit: bool = False) -> sqlite3.Cursor:
-        """
-        Execute a single statement and return the cursor.
-        If commit=True, commits after execution.
-        """
-        with self._lock:
-            cur = self.conn.execute(sql, params)
-            if commit:
-                self.conn.commit()
-            return cur
-
-    def executemany(self, sql: str, seq_of_params: List[tuple], commit: bool = False) -> sqlite3.Cursor:
-        with self._lock:
-            cur = self.conn.executemany(sql, seq_of_params)
-            if commit:
-                self.conn.commit()
-            return cur
-
-    def query_all(self, sql: str, params: tuple = ()) -> List[sqlite3.Row]:
-        with self._lock:
-            cur = self.conn.execute(sql, params)
-            rows = cur.fetchall()
-            return rows
-
-    def close(self) -> None:
-        """Close the persistent connection. Call at application shutdown."""
-        with self._lock:
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
-            finally:
-                self.conn.close()
-
-
-def get_database(database_path: str) -> Database:
-    """
-    Return a singleton Database instance for the given path.
-    Repeated calls will return the same Database (so the connection remains open).
-    """
-    with _DB_INSTANCES_LOCK:
-        db = _DB_INSTANCES.get(database_path)
-        if db is None:
-            db = Database(database_path)
-            db.init_db()
-            _DB_INSTANCES[database_path] = db
-        return db
-
-
-# Backward-compatible functions that use the persistent Database instance.
 def init_db(database_path: str) -> None:
     """
-    Initialize the database schema. Leaves the connection open (via the singleton instance).
+    Initialize database schema. Safe to call multiple times.
+    Creates:
+    - analyses
+    - files
+    - embeddings
+    - chunks (with embedding BLOB column for sqlite-vector)
     """
-    db = get_database(database_path)
-    db.init_db()
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        # analyses table
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analyses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                file_count INTEGER DEFAULT 0,
+                embedding_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+        # files table (stores full content, used to reconstruct chunks)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_id INTEGER NOT NULL,
+                path TEXT NOT NULL,
+                content TEXT,
+                language TEXT,
+                snippet TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_analysis ON files(analysis_id);")
+
+        # embeddings: audit/backup store of embeddings as JSON text
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL,
+                vector TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_file ON embeddings(file_id);")
+
+        # chunks table: metadata for chunked documents; includes embedding BLOB column
+        # which sqlite-vector will operate on (via vector_as_f32 / vector_full_scan / vector_init, etc).
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL,
+                path TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                embedding BLOB,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def create_analysis(database_path: str, name: str, path: str, status: str = "pending") -> int:
-    db = get_database(database_path)
-    cur = db.execute(
-        "INSERT INTO analyses (name, path, status) VALUES (?, ?, ?)",
-        (name, path, status),
-        commit=True,
-    )
-    return cur.lastrowid
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO analyses (name, path, status) VALUES (?, ?, ?)",
+            (name, path, status),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
 
 
 def update_analysis_status(database_path: str, analysis_id: int, status: str) -> None:
-    db = get_database(database_path)
-    db.execute("UPDATE analyses SET status = ? WHERE id = ?", (status, analysis_id), commit=True)
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE analyses SET status = ? WHERE id = ?", (status, analysis_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def update_analysis_counts(database_path: str, analysis_id: int, file_count: int, embedding_count: int) -> None:
-    db = get_database(database_path)
-    db.execute(
-        "UPDATE analyses SET file_count = ?, embedding_count = ? WHERE id = ?",
-        (file_count, embedding_count, analysis_id),
-        commit=True,
-    )
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE analyses SET file_count = ?, embedding_count = ? WHERE id = ?",
+            (file_count, embedding_count, analysis_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def store_file(database_path: str, analysis_id: int, path: str, content: str, language: str) -> int:
-    db = get_database(database_path)
-    cur = db.execute(
-        "INSERT INTO files (analysis_id, path, content, language) VALUES (?, ?, ?, ?)",
-        (analysis_id, path, content, language),
-        commit=True,
-    )
-    return cur.lastrowid
+    """
+    Insert a file row. Returns the new file id.
+    """
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO files (analysis_id, path, content, language, snippet) VALUES (?, ?, ?, ?, ?)",
+            (analysis_id, path, content, language, (content[:512] if content else "")),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
 
 
 def store_embedding(database_path: str, file_id: int, vector: Any) -> None:
-    db = get_database(database_path)
-    db.execute(
-        "INSERT INTO embeddings (file_id, vector) VALUES (?, ?)",
-        (file_id, json.dumps(vector)),
-        commit=True,
-    )
+    """
+    Store an embedding in the embeddings audit table as JSON text.
+    Keep semantics backward-compatible: external code expects this to exist.
+    """
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO embeddings (file_id, vector) VALUES (?, ?)",
+            (file_id, json.dumps(vector)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_chunk_row_with_null_embedding(database_path: str, file_id: int, path: str, chunk_index: int) -> int:
+    """
+    Convenience to insert a chunk metadata row without populating embedding column.
+    Returns the new chunks.id.
+    (Typically you will later update chunks.embedding using the sqlite-vector API or via
+    an INSERT that uses vector_as_f32(...) as done in analyzer._insert_chunk_vector.)
+    """
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO chunks (file_id, path, chunk_index) VALUES (?, ?, ?)",
+            (file_id, path, chunk_index),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
 
 
 def list_analyses(database_path: str) -> List[Dict[str, Any]]:
-    db = get_database(database_path)
-    rows = db.query_all(
-        "SELECT id, name, path, status, file_count, embedding_count, created_at FROM analyses ORDER BY id DESC"
-    )
-    results: List[Dict[str, Any]] = []
-    for r in rows:
-        results.append(
-            {
-                "id": r["id"],
-                "name": r["name"],
-                "path": r["path"],
-                "status": r["status"],
-                "file_count": r["file_count"],
-                "embedding_count": r["embedding_count"],
-                "created_at": r["created_at"],
-            }
-        )
-    return results
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT id, name, path, status, file_count, embedding_count, created_at FROM analyses ORDER BY id DESC"
+        ).fetchall()
+        results: List[Dict[str, Any]] = []
+        for r in rows:
+            results.append(
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "path": r["path"],
+                    "status": r["status"],
+                    "file_count": r["file_count"],
+                    "embedding_count": r["embedding_count"],
+                    "created_at": r["created_at"],
+                }
+            )
+        return results
+    finally:
+        conn.close()
 
 
 def list_files_for_analysis(database_path: str, analysis_id: int) -> List[Dict[str, Any]]:
-    db = get_database(database_path)
-    rows = db.query_all(
-        "SELECT id, path, snippet FROM files WHERE analysis_id = ? ORDER BY id DESC", (analysis_id,)
-    )
-    return [{"id": r["id"], "path": r["path"], "snippet": r["snippet"]} for r in rows]
+    conn = _get_connection(database_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, path, snippet FROM files WHERE analysis_id = ? ORDER BY id DESC", (analysis_id,)
+        ).fetchall()
+        return [{"id": r["id"], "path": r["path"], "snippet": r["snippet"]} for r in rows]
+    finally:
+        conn.close()
 
 
 def delete_analysis(database_path: str, analysis_id: int) -> None:
     """
-    Delete an analysis and all related files and embeddings.
-    Uses the persistent connection and keeps it open afterwards.
+    Delete an analysis and cascade-delete associated files / embeddings / chunks.
+    SQLite foreign keys require PRAGMA foreign_keys = ON for enforcement; do explicit deletes
+    for safety across SQLite builds.
     """
-    db = get_database(database_path)
-    with db._lock:
-        # Find file IDs for the analysis
-        cur = db.conn.execute("SELECT id FROM files WHERE analysis_id = ?", (analysis_id,))
-        file_ids = [r["id"] for r in cur.fetchall()]
-
-        # Delete embeddings for those files
-        if file_ids:
-            db.conn.executemany("DELETE FROM embeddings WHERE file_id = ?", [(fid,) for fid in file_ids])
-
-        # Delete files
-        db.conn.execute("DELETE FROM files WHERE analysis_id = ?", (analysis_id,))
-
-        # Delete analysis row
-        db.conn.execute("DELETE FROM analyses WHERE id = ?", (analysis_id,))
-
-        db.conn.commit()
-
-
-def close_database(database_path: Optional[str] = None) -> None:
-    """
-    Close the persistent connection.
-    - If database_path is provided, close that database's connection.
-    - If None, close all opened connections.
-    """
-    with _DB_INSTANCES_LOCK:
-        if database_path is None:
-            keys = list(_DB_INSTANCES.keys())
-            for k in keys:
-                try:
-                    _DB_INSTANCES[k].close()
-                except Exception:
-                    pass
-                del _DB_INSTANCES[k]
-        else:
-            db = _DB_INSTANCES.pop(database_path, None)
-            if db:
-                try:
-                    db.close()
-                except Exception:
-                    pass
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        # delete embeddings for files in analysis
+        cur.execute(
+            "DELETE FROM embeddings WHERE file_id IN (SELECT id FROM files WHERE analysis_id = ?)",
+            (analysis_id,),
+        )
+        # delete chunks for files in analysis
+        cur.execute(
+            "DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE analysis_id = ?)",
+            (analysis_id,),
+        )
+        # delete files
+        cur.execute("DELETE FROM files WHERE analysis_id = ?", (analysis_id,))
+        # delete analysis row
+        cur.execute("DELETE FROM analyses WHERE id = ?", (analysis_id,))
+        conn.commit()
+    finally:
+        conn.close()

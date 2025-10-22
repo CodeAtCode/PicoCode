@@ -1,14 +1,18 @@
 import os
 import json
+import time
 import traceback
 import subprocess
 import asyncio
 import concurrent.futures
+import sqlite3
+import importlib.resources
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from db import create_analysis, store_file, store_embedding, update_analysis_status, update_analysis_counts
 from external_api import get_embedding_for_text, call_coding_api
+from llama_index.core import Document
 
 # language detection by extension
 EXT_LANG = {
@@ -26,9 +30,25 @@ EXT_LANG = {
     ".md": "markdown",
 }
 
-EMBEDDING_CONCURRENCY = 4  # tunable: how many concurrent embedding requests
+# Chunking parameters (tunable)
+CHUNK_SIZE = 800         # characters per chunk
+CHUNK_OVERLAP = 100      # overlapping characters between chunks
+
+EMBEDDING_CONCURRENCY = 4
 _THREADPOOL_WORKERS = max(16, EMBEDDING_CONCURRENCY + 8)
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_THREADPOOL_WORKERS)
+
+# sqlite-vector defaults (sensible fixed defaults per provided API)
+SQLITE_VECTOR_PKG = "sqlite_vector.binaries"
+SQLITE_VECTOR_RESOURCE = "vector"
+SQLITE_VECTOR_VERSION_FN = "vector_version"      # SELECT vector_version();
+
+# Strict behavior: fail fast if extension can't be loaded or calls fail
+STRICT_VECTOR_INTEGRATION = True
+
+# Retry policy for DB-locked operations
+DB_LOCK_RETRY_COUNT = 6
+DB_LOCK_RETRY_BASE_DELAY = 0.05  # seconds, exponential backoff multiplier
 
 
 def detect_language(path: str):
@@ -42,111 +62,7 @@ def detect_language(path: str):
     return EXT_LANG.get(ext, "text")
 
 
-def _find_python_executable_in_venv(venv_path: str):
-    p1 = os.path.join(venv_path, "bin", "python")
-    p2 = os.path.join(venv_path, "Scripts", "python.exe")
-    if os.path.exists(p1) and os.access(p1, os.X_OK):
-        return p1
-    if os.path.exists(p2) and os.access(p2, os.X_OK):
-        return p2
-    if os.path.exists(venv_path) and os.access(venv_path, os.X_OK):
-        return venv_path
-    return None
-
-
-def parse_venv_dependencies_with_pip(venv_path: str):
-    if not venv_path:
-        return {}
-    venv_python = _find_python_executable_in_venv(venv_path)
-    if not venv_python:
-        return {}
-    try:
-        cmd = [venv_python, "-m", "pip", "list", "--format=json"]
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
-        data = json.loads(proc.stdout)
-        return {item.get("name"): item.get("version") for item in data if "name" in item}
-    except Exception:
-        return {}
-
-
-def parse_pyproject_dependencies(local_path: str):
-    pyproject = os.path.join(local_path, "pyproject.toml")
-    if not os.path.exists(pyproject):
-        return {}
-    try:
-        try:
-            import tomllib as _toml  # Python 3.11+
-        except Exception:
-            import tomli as _toml  # fallback
-        with open(pyproject, "rb") as fh:
-            data = _toml.load(fh)
-        deps = {}
-        project = data.get("project", {})
-        if isinstance(project, dict):
-            deps_list = project.get("dependencies") or []
-            if isinstance(deps_list, list):
-                for dep in deps_list:
-                    deps[dep] = ""
-        tool = data.get("tool", {})
-        poetry = tool.get("poetry", {})
-        if isinstance(poetry, dict):
-            for key in ("dependencies", "dev-dependencies"):
-                deps_section = poetry.get(key, {})
-                if isinstance(deps_section, dict):
-                    for k, v in deps_section.items():
-                        deps[k] = v if not isinstance(v, dict) else ""
-        tool_uv = data.get("tool", {}).get("uv")
-        if tool_uv is not None:
-            deps["__tool_uv_config_present__"] = True
-        return deps
-    except Exception:
-        return {}
-
-
-def find_uv_managed_venv(local_path: str):
-    candidates = [
-        ".venv",
-        ".uv/venv",
-        ".uvenv",
-        "venv",
-        "env",
-        ".venv/venv",
-    ]
-    for c in candidates:
-        p = os.path.join(local_path, c)
-        if os.path.isdir(p):
-            py = _find_python_executable_in_venv(p)
-            if py:
-                return p
-    return None
-
-
-def detect_uv_usage(local_path: str, venv_path: str = None):
-    details = {}
-    py_deps = parse_pyproject_dependencies(local_path)
-    if py_deps:
-        details["pyproject"] = py_deps
-        if py_deps.get("__tool_uv_config_present__") or any(
-            (k.lower() == "uv" or (isinstance(k, str) and k.lower().split()[0] == "uv")) for k in py_deps.keys()
-        ):
-            return {"uv_detected": True, "source": "pyproject", "details": details, "resolved_venv": None}
-    if venv_path and os.path.exists(venv_path):
-        pips = parse_venv_dependencies_with_pip(venv_path)
-        details["pip"] = pips
-        if any(name.lower() == "uv" for name in pips.keys()):
-            return {"uv_detected": True, "source": "pip", "details": details, "resolved_venv": venv_path}
-    found = find_uv_managed_venv(local_path)
-    if found:
-        pips = parse_venv_dependencies_with_pip(found)
-        details["pip_discovered"] = pips
-        if any(name.lower() == "uv" for name in pips.keys()):
-            return {"uv_detected": True, "source": "venv_search", "details": details, "resolved_venv": found}
-        return {"uv_detected": False, "source": "venv_search_no_uv", "details": details, "resolved_venv": found}
-    return {"uv_detected": False, "source": "none", "details": details, "resolved_venv": None}
-
-
 # Async helpers ---------------------------------------------------------------
-
 async def _run_in_executor(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_EXECUTOR, lambda: func(*args, **kwargs))
@@ -155,6 +71,199 @@ async def _run_in_executor(func, *args, **kwargs):
 async def async_get_embedding(text: str, model: Optional[str] = None):
     # Wrap the (possibly blocking) get_embedding_for_text in a threadpool so the event loop isn't blocked.
     return await _run_in_executor(get_embedding_for_text, text, model)
+
+
+# Simple chunker (character-based). Tunable CHUNK_SIZE, CHUNK_OVERLAP.
+def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
+    if chunk_size <= 0:
+        return [text]
+    step = max(1, chunk_size - overlap)
+    chunks: List[str] = []
+    start = 0
+    L = len(text)
+    while start < L:
+        end = min(start + chunk_size, L)
+        chunks.append(text[start:end])
+        start += step
+    return chunks
+
+
+# --- sqlite-vector integration helpers ---------------------------------------
+def _connect_db(db_path: str, timeout: float = 30.0) -> sqlite3.Connection:
+    # timeout instructs sqlite to wait up to `timeout` seconds for locks
+    conn = sqlite3.connect(db_path, timeout=timeout, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000;")  # 30s
+    except Exception:
+        pass
+    return conn
+
+
+def _load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:
+    """
+    Loads sqlite-vector binary from the installed python package and performs a lightweight
+    sanity check (calls vector_version() if available). Raises on error if STRICT_VECTOR_INTEGRATION.
+    """
+    try:
+        ext_path = importlib.resources.files(SQLITE_VECTOR_PKG) / SQLITE_VECTOR_RESOURCE
+        conn.load_extension(str(ext_path))
+        try:
+            conn.enable_load_extension(False)
+        except Exception:
+            pass
+        # optional quick check: call vector_version()
+        try:
+            cur = conn.execute(f"SELECT {SQLITE_VECTOR_VERSION_FN}()")
+            _ = cur.fetchone()
+        except Exception:
+            # version function may not be present; ignore
+            pass
+    except Exception as e:
+        if STRICT_VECTOR_INTEGRATION:
+            raise RuntimeError(f"Failed to load sqlite-vector extension: {e}") from e
+        else:
+            print(f"[warning] sqlite-vector extension not loaded: {e}")
+
+
+def _ensure_chunks_and_meta(conn: sqlite3.Connection):
+    """
+    Create chunks table (if not exist) with embedding column and meta table for vector dimension.
+    Safe to call multiple times.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            embedding BLOB,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vector_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """
+    )
+    conn.commit()
+
+
+def _set_vector_dimension(conn: sqlite3.Connection, dim: int):
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO vector_meta(key, value) VALUES('dimension', ?)", (str(dim),))
+    conn.commit()
+
+
+def _insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path: str, chunk_index: int, vector: List[float]) -> int:
+    """
+    Insert a chunk row with embedding using vector_as_f32(json); retries on sqlite3.OperationalError 'database is locked'.
+    Returns the chunks.rowid.
+    """
+    cur = conn.cursor()
+    # Ensure schema/meta present
+    _ensure_chunks_and_meta(conn)
+
+    # dimension handling: store or verify
+    cur.execute("SELECT value FROM vector_meta WHERE key = 'dimension'")
+    row = cur.fetchone()
+    dim = len(vector)
+    if not row:
+        _set_vector_dimension(conn, dim)
+        try:
+            conn.execute(f"SELECT vector_init('chunks', 'embedding', 'dimension={dim},type=FLOAT32,distance=COSINE')")
+        except Exception as e:
+            raise RuntimeError(f"vector_init failed: {e}") from e
+    else:
+        stored_dim = int(row[0])
+        if stored_dim != dim:
+            raise RuntimeError(f"Embedding dimension mismatch: stored={stored_dim}, new={dim}")
+
+    q_vec = json.dumps(vector)
+
+    attempt = 0
+    while True:
+        try:
+            # use vector_as_f32(json) as per API so extension formats blob
+            cur.execute("INSERT INTO chunks (file_id, path, chunk_index, embedding) VALUES (?, ?, ?, vector_as_f32(?))",
+                        (file_id, path, chunk_index, q_vec))
+            conn.commit()
+            return int(cur.lastrowid)
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "database is locked" in msg and attempt < DB_LOCK_RETRY_COUNT:
+                attempt += 1
+                delay = DB_LOCK_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                time.sleep(delay)
+                continue
+            else:
+                raise RuntimeError(f"Failed to INSERT chunk vector (vector_as_f32 call): {e}") from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to INSERT chunk vector (vector_as_f32 call): {e}") from e
+
+
+def _search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Uses vector_full_scan to retrieve nearest neighbors from the chunks table.
+    Returns list of dicts: {file_id, path, chunk_index, score}
+    """
+    conn = _connect_db(database_path)
+    try:
+        _load_sqlite_vector_extension(conn)
+        _ensure_chunks_and_meta(conn)
+
+        q_json = json.dumps(q_vector)
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT c.file_id, c.path, c.chunk_index, v.distance
+                FROM vector_full_scan('chunks', 'embedding', vector_as_f32(?), ?) AS v
+                JOIN chunks AS c ON c.rowid = v.rowid
+                ORDER BY v.distance ASC
+                LIMIT ?
+                """,
+                (q_json, top_k, top_k),
+            )
+            rows = cur.fetchall()
+        except Exception as e:
+            raise RuntimeError(f"vector_full_scan call failed: {e}") from e
+
+        results: List[Dict[str, Any]] = []
+        for file_id, path, chunk_index, distance in rows:
+            try:
+                score = 1.0 - float(distance)
+            except Exception:
+                score = float(distance)
+            results.append({"file_id": int(file_id), "path": path, "chunk_index": int(chunk_index), "score": score})
+        return results
+    finally:
+        conn.close()
+
+
+def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optional[str]:
+    conn = _connect_db(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT content FROM files WHERE id = ?", (file_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        content = row[0] or ""
+        if CHUNK_SIZE <= 0:
+            return content
+        step = max(1, CHUNK_SIZE - CHUNK_OVERLAP)
+        start = chunk_index * step
+        end = min(start + CHUNK_SIZE, len(content))
+        return content[start:end]
+    finally:
+        conn.close()
 
 
 # Main async processing for a single file
@@ -166,6 +275,11 @@ async def _process_file(
     rel_path: str,
     cfg: Optional[Dict[str, Any]],
 ):
+    """
+    Real implementation: read file, skip irrelevant, store file, chunk, compute embeddings per chunk,
+    store audit embedding and insert chunk vectors into chunks.embedding (via sqlite-vector).
+    Uses retries for DB locked errors.
+    """
     try:
         # read file content in threadpool
         try:
@@ -184,36 +298,80 @@ async def _process_file(
         # store file (store_file is sync, run in executor)
         fid = await _run_in_executor(store_file, database_path, analysis_id, rel_path, content, lang)
 
-        # embedding
+        # create Document for compatibility
+        _ = Document(text=content, extra_info={"path": rel_path, "lang": lang})
+
         embedding_model = None
         if isinstance(cfg, dict):
             embedding_model = cfg.get("embedding_model")
 
-        # limit concurrency for embedding provider
-        await semaphore.acquire()
-        try:
-            emb = await async_get_embedding(content, model=embedding_model)
-        finally:
-            semaphore.release()
+        # chunk the content
+        chunks = chunk_text(content, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        if not chunks:
+            chunks = [content]
 
-        if emb:
-            await _run_in_executor(store_embedding, database_path, fid, emb)
-            return {"stored": True, "embedded": True}
-        else:
-            # store a small error record if embedding provider returns None/empty
-            err_msg = "Embedding API returned no vector for file."
+        # Ensure extension present and tables created (do once per file)
+        conn_test = _connect_db(database_path)
+        try:
+            _load_sqlite_vector_extension(conn_test)
+            _ensure_chunks_and_meta(conn_test)
+        finally:
+            conn_test.close()
+
+        embedded_any = False
+
+        for idx, chunk in enumerate(chunks):
+            chunk_doc = Document(text=chunk, extra_info={"path": rel_path, "lang": lang, "chunk_index": idx, "chunk_count": len(chunks)})
+
+            await semaphore.acquire()
             try:
-                await _run_in_executor(
-                    store_file,
-                    database_path,
-                    analysis_id,
-                    f"errors/{rel_path}.error.txt",
-                    err_msg,
-                    "error",
-                )
-            except Exception:
-                pass
-            return {"stored": True, "embedded": False}
+                emb = await async_get_embedding(chunk_doc.text, model=embedding_model)
+            finally:
+                semaphore.release()
+
+            if emb:
+                # store audit embedding (non-blocking to vector store)
+                await _run_in_executor(store_embedding, database_path, fid, emb)
+
+                # insert chunk vector into sqlite-vector-backed chunks.embedding with retry
+                def _insert_task(dbp, fid_local, pth, idx_local, vector_local):
+                    conn2 = _connect_db(dbp)
+                    try:
+                        _load_sqlite_vector_extension(conn2)
+                        return _insert_chunk_vector_with_retry(conn2, fid_local, pth, idx_local, vector_local)
+                    finally:
+                        conn2.close()
+
+                try:
+                    await _run_in_executor(_insert_task, database_path, fid, rel_path, idx, emb)
+                    embedded_any = True
+                except Exception as e:
+                    # record an error row in files table for diagnostics but continue processing other chunks
+                    try:
+                        await _run_in_executor(
+                            store_file,
+                            database_path,
+                            analysis_id,
+                            f"errors/{rel_path}.chunk{idx}.error.txt",
+                            f"Failed to insert chunk vector: {e}",
+                            "error",
+                        )
+                    except Exception:
+                        pass
+            else:
+                try:
+                    await _run_in_executor(
+                        store_file,
+                        database_path,
+                        analysis_id,
+                        f"errors/{rel_path}.chunk{idx}.error.txt",
+                        "Embedding API returned no vector for chunk.",
+                        "error",
+                    )
+                except Exception:
+                    pass
+
+        return {"stored": True, "embedded": embedded_any}
     except Exception as e:
         tb = traceback.format_exc()
         try:
@@ -226,7 +384,6 @@ async def _process_file(
                 json.dumps(error_payload, indent=2),
                 "error",
             )
-            print(error_payload)
         except Exception:
             pass
         return {"stored": False, "embedded": False}
@@ -240,8 +397,7 @@ async def analyze_local_path(
     cfg: Optional[dict] = None,
 ):
     """
-    Async implementation of the analysis pipeline. Use the synchronous wrapper
-    analyze_local_path_background(...) below if you want to keep a blocking API.
+    Async implementation of the analysis pipeline. Persists incremental counts so the UI can poll progress.
     """
     aid = None
     semaphore = asyncio.Semaphore(EMBEDDING_CONCURRENCY)
@@ -267,7 +423,7 @@ async def analyze_local_path(
                 tasks.append(_process_file(semaphore, database_path, aid, full, rel, cfg))
 
         # execute tasks with bounded concurrency handled inside _process_file
-        # gather results while letting exceptions be handled per-task
+        # gather results in chunks and persist incremental counts after each chunk
         for chunk_start in range(0, len(tasks), 256):
             chunk = tasks[chunk_start : chunk_start + 256]
             results = await asyncio.gather(*chunk, return_exceptions=False)
@@ -278,8 +434,24 @@ async def analyze_local_path(
                     if r.get("embedded"):
                         emb_count += 1
 
+            # Persist progress to DB so the frontend can poll it
+            try:
+                await _run_in_executor(update_analysis_counts, database_path, aid, file_count, emb_count)
+            except Exception:
+                try:
+                    await _run_in_executor(
+                        store_file,
+                        database_path,
+                        aid,
+                        f"errors/progress_update_{chunk_start}.error.txt",
+                        f"Failed to update progress at chunk_start={chunk_start}",
+                        "error",
+                    )
+                except Exception:
+                    pass
+
         # detect uv usage and deps (run in executor because it may use subprocess / file IO)
-        uv_info = await _run_in_executor(detect_uv_usage, local_path, venv_path)
+        uv_info = await _run_in_executor(lambda p, v: (None if p is None else p), local_path, venv_path)
         try:
             await _run_in_executor(
                 store_file,
@@ -292,49 +464,7 @@ async def analyze_local_path(
         except Exception:
             pass
 
-        resolved_venv = uv_info.get("resolved_venv") or venv_path
-        if resolved_venv and os.path.exists(resolved_venv):
-            deps = await _run_in_executor(parse_venv_dependencies_with_pip, resolved_venv)
-            try:
-                await _run_in_executor(
-                    store_file,
-                    database_path,
-                    aid,
-                    "venv_dependencies.json",
-                    json.dumps(deps, indent=2),
-                    "deps",
-                )
-            except Exception:
-                pass
-            if uv_info.get("uv_detected") and uv_info.get("resolved_venv") and uv_info.get("resolved_venv") != venv_path:
-                note = {"note": "using discovered venv because uv detected", "discovered_venv": uv_info.get("resolved_venv")}
-                try:
-                    await _run_in_executor(
-                        store_file,
-                        database_path,
-                        aid,
-                        "uv_resolution_note.json",
-                        json.dumps(note, indent=2),
-                        "meta",
-                    )
-                except Exception:
-                    pass
-        else:
-            deps = await _run_in_executor(parse_pyproject_dependencies, local_path)
-            if deps:
-                try:
-                    await _run_in_executor(
-                        store_file,
-                        database_path,
-                        aid,
-                        "pyproject_deps.txt",
-                        json.dumps(deps, indent=2),
-                        "deps",
-                    )
-                except Exception:
-                    pass
-
-        # update final counts/status
+        # final counts & status
         await _run_in_executor(update_analysis_counts, database_path, aid, file_count, emb_count)
         await _run_in_executor(update_analysis_status, database_path, aid, "completed")
     except Exception:
@@ -348,20 +478,19 @@ async def analyze_local_path(
 
 def analyze_local_path_background(local_path: str, database_path: str, venv_path: Optional[str] = None, max_file_size: int = 200000, cfg: Optional[dict] = None):
     """
-    Backwards-compatible blocking wrapper for the async analyze_local_path.
-    Call this from synchronous code; it will run the async pipeline and return when finished.
+    Blocking wrapper for the async analyze_local_path.
     """
     asyncio.run(analyze_local_path(local_path, database_path, venv_path=venv_path, max_file_size=max_file_size, cfg=cfg))
 
 
 # Simple synchronous helpers preserved for compatibility --------------------------------
-
 def dot(a, b):
     return sum(x * y for x, y in zip(a, b))
 
 
 def norm(a):
-    return sum(x * x for x in a) ** 0.5
+    import math
+    return math.sqrt(sum(x * x for x in a))
 
 
 def cosine(a, b):
@@ -369,32 +498,47 @@ def cosine(a, b):
     nb = norm(b)
     if na == 0 or nb == 0:
         return 0.0
-    return dot(a, b) / (na * nb)
+    return sum(x * y for x, y in zip(a, b)) / (na * nb)
 
 
 def search_semantic(query: str, database_path: str, analysis_id: int, top_k: int = 5):
-    # keep this sync for compatibility; it's small and infrequent compared to the bulk embedding work
+    """
+    Uses sqlite-vector's vector_full_scan to retrieve best-matching chunks and returns
+    a list of {file_id, path, chunk_index, score}. Raises on error in strict mode.
+    """
     q_emb = get_embedding_for_text(query)
     if not q_emb:
         return []
-    conn = __import__("sqlite3").connect(database_path)
-    cur = conn.execute(
-        "SELECT files.id, files.path, embeddings.vector FROM files JOIN embeddings ON files.id = embeddings.file_id WHERE files.analysis_id = ?",
-        (analysis_id,),
-    )
-    rows = cur.fetchall()
-    scored = []
-    for fid, path, vector_json in rows:
-        try:
-            vec = json.loads(vector_json)
-            score = cosine(q_emb, vec)
-            scored.append({"file_id": fid, "path": path, "score": score})
-        except Exception:
-            continue
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:top_k]
+
+    try:
+        return _search_vectors(database_path, q_emb, top_k=top_k)
+    except Exception:
+        # propagate error so operator sees underlying issue (extension not loaded/api mismatch)
+        raise
 
 
 def call_coding_model(prompt: str, context: str = ""):
     combined = f"Context:\n{context}\n\nPrompt:\n{prompt}" if context else prompt
     return call_coding_api(combined)
+
+
+# llama-index helper ---------------------------------------------------------
+def llama_index_retrieve_documents(query: str, database_path: str, top_k: int = 5) -> List[Document]:
+    """
+    Return llama_index.core.Document objects for the top_k matching chunks using sqlite-vector.
+    """
+    q_emb = get_embedding_for_text(query)
+    if not q_emb:
+        return []
+
+    rows = _search_vectors(database_path, q_emb, top_k=top_k)
+    docs: List[Document] = []
+    for r in rows:
+        fid = r.get("file_id")
+        path = r.get("path")
+        chunk_idx = r.get("chunk_index", 0)
+        score = r.get("score", 0.0)
+        chunk_text = _get_chunk_text(database_path, fid, chunk_idx) or ""
+        doc = Document(text=chunk_text, extra_info={"path": path, "file_id": fid, "chunk_index": chunk_idx, "score": score})
+        docs.append(doc)
+    return docs
