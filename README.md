@@ -1,6 +1,8 @@
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](http://www.gnu.org/licenses/gpl-3.0)   
-```markdown
+
 # PicoCode - Local Codebase Assistant
+
+<img src="https://github.com/user-attachments/assets/146f5fd1-45cf-4164-b981-635e0db3b791" />
 
 Are you looking for a simple way to asks question to your codebase using the inference provider you want without to be locked to a specific service?
 This tool is a way to achieve this!
