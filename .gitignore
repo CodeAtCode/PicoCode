@@ -1,0 +1,6 @@
+.env
+.venv
+codebase.*
+picocode.egg-info
+uv.lock
+__pycache__
