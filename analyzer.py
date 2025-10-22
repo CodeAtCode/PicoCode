@@ -7,6 +7,7 @@ import asyncio
 import concurrent.futures
 import sqlite3
 import importlib.resources
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -50,6 +51,10 @@ STRICT_VECTOR_INTEGRATION = True
 DB_LOCK_RETRY_COUNT = 6
 DB_LOCK_RETRY_BASE_DELAY = 0.05  # seconds, exponential backoff multiplier
 
+# configure basic logging for visibility
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 def detect_language(path: str):
     if "LICENSE.md" in path:
@@ -71,6 +76,54 @@ async def _run_in_executor(func, *args, **kwargs):
 async def async_get_embedding(text: str, model: Optional[str] = None):
     # Wrap the (possibly blocking) get_embedding_for_text in a threadpool so the event loop isn't blocked.
     return await _run_in_executor(get_embedding_for_text, text, model)
+
+
+# helper: write error files to disk (instead of storing them in the DB)
+def _write_error_file_sync(database_path: str, analysis_id: Optional[int], rel_path: str, content: str, language: Optional[str] = None) -> str:
+    """
+    Synchronously write an error file to disk under:
+      <dir_of_database>/analysis_errors/<analysis_id>/<rel_path>
+
+    rel_path is sanitized to avoid path traversal.
+    Returns the full written path.
+    """
+    try:
+        # base directory: directory that contains the database file; fallback to cwd
+        base = os.path.dirname(os.path.abspath(database_path)) if database_path else os.getcwd()
+    except Exception:
+        base = os.getcwd()
+
+    base_dir = os.path.join(base, "analysis_errors", str(analysis_id or "unknown"))
+
+    # Sanitize rel_path: normalize, remove leading slashes, replace .. with __
+    p = os.path.normpath(rel_path)
+    # Normalize separators and strip any leading drive/sep
+    p = p.replace("\\", "/")
+    while p.startswith("../") or p.startswith("/"):
+        if p.startswith("../"):
+            p = p[len("../") :]
+        elif p.startswith("/"):
+            p = p.lstrip("/")
+    p = p.replace("..", "__")
+    safe_rel = p
+
+    full_path = os.path.join(base_dir, safe_rel)
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+    # Write file (overwrite if exists)
+    try:
+        with open(full_path, "w", encoding="utf-8") as fh:
+            fh.write(content or "")
+    except Exception as e:
+        # As a last resort, log to logger
+        logger.exception("Failed to write error file to disk: %s (dest=%s)", e, full_path)
+
+    return full_path
+
+
+async def _write_error_file(database_path: str, analysis_id: Optional[int], rel_path: str, content: str, language: Optional[str] = None):
+    return await _run_in_executor(_write_error_file_sync, database_path, analysis_id, rel_path, content, language)
 
 
 # Simple chunker (character-based). Tunable CHUNK_SIZE, CHUNK_OVERLAP.
@@ -346,46 +399,31 @@ async def _process_file(
                     await _run_in_executor(_insert_task, database_path, fid, rel_path, idx, emb)
                     embedded_any = True
                 except Exception as e:
-                    # record an error row in files table for diagnostics but continue processing other chunks
+                    # record an error to disk (previously was stored in DB)
                     try:
-                        await _run_in_executor(
-                            store_file,
-                            database_path,
-                            analysis_id,
-                            f"errors/{rel_path}.chunk{idx}.error.txt",
-                            f"Failed to insert chunk vector: {e}",
-                            "error",
-                        )
+                        err_content = f"Failed to insert chunk vector: {e}\n\nTraceback:\n{traceback.format_exc()}"
+                        await _write_error_file(database_path, analysis_id, f"errors/{rel_path}.chunk{idx}.error.txt", err_content, "error")
                     except Exception:
-                        pass
+                        logger.exception("Failed to write chunk-insert error to disk for %s chunk %d", rel_path, idx)
             else:
                 try:
-                    await _run_in_executor(
-                        store_file,
-                        database_path,
-                        analysis_id,
-                        f"errors/{rel_path}.chunk{idx}.error.txt",
-                        "Embedding API returned no vector for chunk.",
-                        "error",
-                    )
+                    err_content = "Embedding API returned no vector for chunk."
+                    await _write_error_file(database_path, analysis_id, f"errors/{rel_path}.chunk{idx}.error.txt", err_content, "error")
                 except Exception:
-                    pass
+                    logger.exception("Failed to write empty-embedding error to disk for %s chunk %d", rel_path, idx)
 
         return {"stored": True, "embedded": embedded_any}
     except Exception as e:
         tb = traceback.format_exc()
         try:
             error_payload = {"file": rel_path, "error": str(e), "traceback": tb[:2000]}
-            await _run_in_executor(
-                store_file,
-                database_path,
-                analysis_id,
-                f"errors/{rel_path}.error.txt",
-                json.dumps(error_payload, indent=2),
-                "error",
-            )
+            # write the error payload to disk instead of DB
+            try:
+                await _write_error_file(database_path, analysis_id, f"errors/{rel_path}.error.txt", json.dumps(error_payload, indent=2), "error")
+            except Exception:
+                logger.exception("Failed to write exception error to disk for file %s", rel_path)
         except Exception:
-            pass
+            logger.exception("Failed while handling exception for file %s", rel_path)
         return {"stored": False, "embedded": False}
 
 
@@ -439,20 +477,16 @@ async def analyze_local_path(
                 await _run_in_executor(update_analysis_counts, database_path, aid, file_count, emb_count)
             except Exception:
                 try:
-                    await _run_in_executor(
-                        store_file,
-                        database_path,
-                        aid,
-                        f"errors/progress_update_{chunk_start}.error.txt",
-                        f"Failed to update progress at chunk_start={chunk_start}",
-                        "error",
-                    )
+                    # Previously this error was recorded to DB; now write to disk
+                    err_content = f"Failed to update progress at chunk_start={chunk_start}"
+                    await _write_error_file(database_path, aid, f"errors/progress_update_{chunk_start}.error.txt", err_content, "error")
                 except Exception:
-                    pass
+                    logger.exception("Failed to write progress-update error to disk for analysis %s", aid)
 
         # detect uv usage and deps (run in executor because it may use subprocess / file IO)
         uv_info = await _run_in_executor(lambda p, v: (None if p is None else p), local_path, venv_path)
         try:
+            # uv_detected.json is meta information — we keep storing meta in DB as before
             await _run_in_executor(
                 store_file,
                 database_path,
@@ -462,7 +496,11 @@ async def analyze_local_path(
                 "meta",
             )
         except Exception:
-            pass
+            # if storing meta fails, log to disk
+            try:
+                await _write_error_file(database_path, aid, "meta/uv_detected_write_failed.error.txt", "Failed to store uv_detected.json in DB", "error")
+            except Exception:
+                logger.exception("Failed to write uv_detected meta error to disk for analysis %s", aid)
 
         # final counts & status
         await _run_in_executor(update_analysis_counts, database_path, aid, file_count, emb_count)
