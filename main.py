@@ -57,7 +57,7 @@ def analyses_status():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@app.post("/analyses/{analysis_id}/delete")
+@app.get("/analyses/{analysis_id}/delete")
 def delete_analysis_endpoint(analysis_id: int):
     try:
         delete_analysis(DATABASE, analysis_id)
