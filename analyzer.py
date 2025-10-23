@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from db import create_analysis, store_file, update_analysis_status, update_analysis_counts
+from db import create_analysis, store_file, update_analysis_status
 from external_api import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
 import logging
@@ -421,17 +421,6 @@ async def analyze_local_path(
                         file_count += 1
                     if r.get("embedded"):
                         emb_count += 1
-
-            # Persist progress to DB so the frontend can poll it
-            try:
-                await _run_in_executor(update_analysis_counts, database_path, aid, file_count, emb_count)
-            except Exception:
-                try:
-                    # Previously this error was recorded to DB; now write to disk
-                    err_content = f"Failed to update progress at chunk_start={chunk_start}"
-                    print(err_content)
-                except Exception:
-                    logger.exception("Failed to write progress-update error to disk for analysis %s", aid)
 
         # detect uv usage and deps (run in executor because it may use subprocess / file IO)
         uv_info = await _run_in_executor(lambda p, v: (None if p is None else p), local_path, venv_path)
