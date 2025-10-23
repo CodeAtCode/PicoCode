@@ -1,15 +1,18 @@
 import os
 import sqlite3
-import json
 from typing import Any, Dict, List, Optional
+
+from config import CFG  # config (keeps chunk_size etc if needed)
 
 # Simple connection helper: we open new connections per operation so the code is robust
 # across threads. We set WAL journal mode for safer concurrency.
+# Added a small timeout to avoid long blocking if DB is locked.
 def _get_connection(db_path: str) -> sqlite3.Connection:
     dirname = os.path.dirname(os.path.abspath(db_path))
     if dirname and not os.path.isdir(dirname):
         os.makedirs(dirname, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    # timeout in seconds for busy sqlite; small value to avoid long blocking in web requests
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode = WAL;")
@@ -23,15 +26,14 @@ def init_db(database_path: str) -> None:
     """
     Initialize database schema. Safe to call multiple times.
     Creates:
-    - analyses
+    - analyses (embedding_count column kept for backward compat but not used as source of truth)
     - files
-    - embeddings
     - chunks (with embedding BLOB column for sqlite-vector)
     """
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
-        # analyses table
+        # analyses table: embedding_count column kept for compatibility but will be computed live
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS analyses (
@@ -39,7 +41,6 @@ def init_db(database_path: str) -> None:
                 name TEXT NOT NULL,
                 path TEXT NOT NULL,
                 status TEXT NOT NULL,
-                file_count INTEGER DEFAULT 0,
                 embedding_count INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
             )
@@ -63,22 +64,7 @@ def init_db(database_path: str) -> None:
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_analysis ON files(analysis_id);")
 
-        # embeddings: audit/backup store of embeddings as JSON text
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS embeddings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                file_id INTEGER NOT NULL,
-                vector TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
-            )
-            """
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_file ON embeddings(file_id);")
-
         # chunks table: metadata for chunked documents; includes embedding BLOB column
-        # which sqlite-vector will operate on (via vector_as_f32 / vector_full_scan / vector_init, etc).
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS chunks (
@@ -122,19 +108,6 @@ def update_analysis_status(database_path: str, analysis_id: int, status: str) ->
         conn.close()
 
 
-def update_analysis_counts(database_path: str, analysis_id: int, file_count: int, embedding_count: int) -> None:
-    conn = _get_connection(database_path)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE analyses SET file_count = ?, embedding_count = ? WHERE id = ?",
-            (file_count, embedding_count, analysis_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def store_file(database_path: str, analysis_id: int, path: str, content: str, language: str) -> int:
     """
     Insert a file row. Returns the new file id.
@@ -152,29 +125,10 @@ def store_file(database_path: str, analysis_id: int, path: str, content: str, la
         conn.close()
 
 
-def store_embedding(database_path: str, file_id: int, vector: Any) -> None:
-    """
-    Store an embedding in the embeddings audit table as JSON text.
-    Keep semantics backward-compatible: external code expects this to exist.
-    """
-    conn = _get_connection(database_path)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO embeddings (file_id, vector) VALUES (?, ?)",
-            (file_id, json.dumps(vector)),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def insert_chunk_row_with_null_embedding(database_path: str, file_id: int, path: str, chunk_index: int) -> int:
     """
-    Convenience to insert a chunk metadata row without populating embedding column.
+    Insert a chunk metadata row without populating embedding column.
     Returns the new chunks.id.
-    (Typically you will later update chunks.embedding using the sqlite-vector API or via
-    an INSERT that uses vector_as_f32(...) as done in analyzer._insert_chunk_vector.)
     """
     conn = _get_connection(database_path)
     try:
@@ -190,11 +144,27 @@ def insert_chunk_row_with_null_embedding(database_path: str, file_id: int, path:
 
 
 def list_analyses(database_path: str) -> List[Dict[str, Any]]:
+    """
+    Return analyses with computed file_count and computed embedding_count (from chunks.embedding).
+    This ensures the UI shows accurate, up-to-date counts based on actual rows.
+    """
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
         rows = cur.execute(
-            "SELECT id, name, path, status, file_count, embedding_count, created_at FROM analyses ORDER BY id DESC"
+            """
+            SELECT
+                a.id,
+                a.name,
+                a.path,
+                a.status,
+                (SELECT COUNT(*) FROM files f WHERE f.analysis_id = a.id) AS file_count,
+                (SELECT COUNT(*) FROM chunks ch JOIN files f2 ON ch.file_id = f2.id
+                    WHERE f2.analysis_id = a.id AND ch.embedding IS NOT NULL) AS embedding_count,
+                a.created_at
+            FROM analyses a
+            ORDER BY a.id DESC
+            """
         ).fetchall()
         results: List[Dict[str, Any]] = []
         for r in rows:
@@ -204,8 +174,8 @@ def list_analyses(database_path: str) -> List[Dict[str, Any]]:
                     "name": r["name"],
                     "path": r["path"],
                     "status": r["status"],
-                    "file_count": r["file_count"],
-                    "embedding_count": r["embedding_count"],
+                    "file_count": int(r["file_count"]),
+                    "embedding_count": int(r["embedding_count"]),
                     "created_at": r["created_at"],
                 }
             )
@@ -227,18 +197,12 @@ def list_files_for_analysis(database_path: str, analysis_id: int) -> List[Dict[s
 
 def delete_analysis(database_path: str, analysis_id: int) -> None:
     """
-    Delete an analysis and cascade-delete associated files / embeddings / chunks.
-    SQLite foreign keys require PRAGMA foreign_keys = ON for enforcement; do explicit deletes
-    for safety across SQLite builds.
+    Delete an analysis and cascade-delete associated files / chunks.
+    Foreign key enforcement varies by SQLite build; do explicit deletes for safety.
     """
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
-        # delete embeddings for files in analysis
-        cur.execute(
-            "DELETE FROM embeddings WHERE file_id IN (SELECT id FROM files WHERE analysis_id = ?)",
-            (analysis_id,),
-        )
         # delete chunks for files in analysis
         cur.execute(
             "DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE analysis_id = ?)",

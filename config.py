@@ -1,5 +1,3 @@
-# config.py
-# Loads configuration from a .env file (and environment) using python-dotenv.
 from dotenv import load_dotenv
 import os
 
@@ -12,6 +10,12 @@ def _int_env(name, default):
         return int(v) if v is not None else default
     except Exception:
         return default
+
+def _bool_env(name, default):
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return v.lower() in ("1", "true", "yes")
 
 # Expose a CFG dictionary for the rest of the app
 CFG = {
@@ -26,7 +30,11 @@ CFG = {
     "embedding_model": os.getenv("EMBEDDING_MODEL"),
     "coding_model": os.getenv("CODING_MODEL"),
 
+    # chunking parameters configurable via env
+    "chunk_size": _int_env("CHUNK_SIZE", 800),
+    "chunk_overlap": _int_env("CHUNK_OVERLAP", 100),
+
     # uvicorn host/port (from .env)
     "uvicorn_host": os.getenv("UVICORN_HOST", "127.0.0.1"),
-    "uvicorn_port": _int_env("UVICORN_PORT", 8000),
+    "uvicorn_port": int(os.getenv("UVICORN_PORT", "8000")),
 }

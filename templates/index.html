@@ -426,7 +426,7 @@
       if(a.status === "running"){
         const fc = a.file_count || 0;
         const ec = a.embedding_count || 0;
-        out.innerHTML = `<div class="progress-info"><strong>Indexing in progress</strong> — ${fc} files processed <small class="text-muted">(${ec} embeddings)</small><div class="spinner-small ms-2" aria-hidden="true"></div></div>`;
+        out.innerHTML = `<div class="progress-info"><strong>Indexing in progress</strong> — ${fc} files processed <small class="text-muted">(${ec} embeddings)</small><div class="spinner-small ms-2"></div></div>`;
       } else if(a.status === "pending"){
         out.innerHTML = `<span class="text-muted">Analysis queued (status: ${a.status}).</span>`;
       } else if(a.status === "completed"){
@@ -438,21 +438,23 @@
       }
     }
 
-    let _pollHandle = null;
-    async function startPolling(){
-      const analyses = await fetchAnalysesStatus();
-      if(analyses){
-        updateAnalysesListUI(analyses);
-        renderProgressForSelectedAnalysis(analyses);
-      }
-      if(_pollHandle) clearInterval(_pollHandle);
-      _pollHandle = setInterval(async () => {
-        const analyses = await fetchAnalysesStatus();
-        if(analyses){
-          updateAnalysesListUI(analyses);
-          renderProgressForSelectedAnalysis(analyses);
+    let _polling = false;
+    async function pollLoop(){
+      if(_polling) return;
+      _polling = true;
+      while(true){
+        try{
+          const analyses = await fetchAnalysesStatus();
+          if(analyses){
+            updateAnalysesListUI(analyses);
+            renderProgressForSelectedAnalysis(analyses);
+          }
+        } catch(e){
+          // ignore and continue
         }
-      }, POLL_INTERVAL);
+        // wait POLL_INTERVAL ms before next request — ensures sequential calls
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+      }
     }
 
     // --- Search only: show results in chat window (transient) ---
@@ -529,7 +531,8 @@
       });
 
       renderChat();
-      startPolling();
+      // start sequential polling loop (waits previous response before next)
+      pollLoop();
     });
   </script>
 </body>

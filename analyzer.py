@@ -11,9 +11,11 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from db import create_analysis, store_file, store_embedding, update_analysis_status, update_analysis_counts
+from db import create_analysis, store_file, update_analysis_status, update_analysis_counts
 from external_api import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
+import logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # language detection by extension
 EXT_LANG = {
@@ -76,55 +78,6 @@ async def _run_in_executor(func, *args, **kwargs):
 async def async_get_embedding(text: str, model: Optional[str] = None):
     # Wrap the (possibly blocking) get_embedding_for_text in a threadpool so the event loop isn't blocked.
     return await _run_in_executor(get_embedding_for_text, text, model)
-
-
-# helper: write error files to disk (instead of storing them in the DB)
-def _write_error_file_sync(database_path: str, analysis_id: Optional[int], rel_path: str, content: str, language: Optional[str] = None) -> str:
-    """
-    Synchronously write an error file to disk under:
-      <dir_of_database>/analysis_errors/<analysis_id>/<rel_path>
-
-    rel_path is sanitized to avoid path traversal.
-    Returns the full written path.
-    """
-    try:
-        # base directory: directory that contains the database file; fallback to cwd
-        base = os.path.dirname(os.path.abspath(database_path)) if database_path else os.getcwd()
-    except Exception:
-        base = os.getcwd()
-
-    base_dir = os.path.join(base, "analysis_errors", str(analysis_id or "unknown"))
-
-    # Sanitize rel_path: normalize, remove leading slashes, replace .. with __
-    p = os.path.normpath(rel_path)
-    # Normalize separators and strip any leading drive/sep
-    p = p.replace("\\", "/")
-    while p.startswith("../") or p.startswith("/"):
-        if p.startswith("../"):
-            p = p[len("../") :]
-        elif p.startswith("/"):
-            p = p.lstrip("/")
-    p = p.replace("..", "__")
-    safe_rel = p
-
-    full_path = os.path.join(base_dir, safe_rel)
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(full_path), exist_ok=True)
-
-    # Write file (overwrite if exists)
-    try:
-        with open(full_path, "w", encoding="utf-8") as fh:
-            fh.write(content or "")
-    except Exception as e:
-        # As a last resort, log to logger
-        logger.exception("Failed to write error file to disk: %s (dest=%s)", e, full_path)
-
-    return full_path
-
-
-async def _write_error_file(database_path: str, analysis_id: Optional[int], rel_path: str, content: str, language: Optional[str] = None):
-    return await _run_in_executor(_write_error_file_sync, database_path, analysis_id, rel_path, content, language)
-
 
 # Simple chunker (character-based). Tunable CHUNK_SIZE, CHUNK_OVERLAP.
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
@@ -383,9 +336,6 @@ async def _process_file(
                 semaphore.release()
 
             if emb:
-                # store audit embedding (non-blocking to vector store)
-                await _run_in_executor(store_embedding, database_path, fid, emb)
-
                 # insert chunk vector into sqlite-vector-backed chunks.embedding with retry
                 def _insert_task(dbp, fid_local, pth, idx_local, vector_local):
                     conn2 = _connect_db(dbp)
@@ -402,13 +352,13 @@ async def _process_file(
                     # record an error to disk (previously was stored in DB)
                     try:
                         err_content = f"Failed to insert chunk vector: {e}\n\nTraceback:\n{traceback.format_exc()}"
-                        await _write_error_file(database_path, analysis_id, f"errors/{rel_path}.chunk{idx}.error.txt", err_content, "error")
+                        print(err_content)
                     except Exception:
                         logger.exception("Failed to write chunk-insert error to disk for %s chunk %d", rel_path, idx)
             else:
                 try:
                     err_content = "Embedding API returned no vector for chunk."
-                    await _write_error_file(database_path, analysis_id, f"errors/{rel_path}.chunk{idx}.error.txt", err_content, "error")
+                    print(err_content)
                 except Exception:
                     logger.exception("Failed to write empty-embedding error to disk for %s chunk %d", rel_path, idx)
 
@@ -419,7 +369,7 @@ async def _process_file(
             error_payload = {"file": rel_path, "error": str(e), "traceback": tb[:2000]}
             # write the error payload to disk instead of DB
             try:
-                await _write_error_file(database_path, analysis_id, f"errors/{rel_path}.error.txt", json.dumps(error_payload, indent=2), "error")
+                print(error_payload)
             except Exception:
                 logger.exception("Failed to write exception error to disk for file %s", rel_path)
         except Exception:
@@ -479,7 +429,7 @@ async def analyze_local_path(
                 try:
                     # Previously this error was recorded to DB; now write to disk
                     err_content = f"Failed to update progress at chunk_start={chunk_start}"
-                    await _write_error_file(database_path, aid, f"errors/progress_update_{chunk_start}.error.txt", err_content, "error")
+                    print(err_content)
                 except Exception:
                     logger.exception("Failed to write progress-update error to disk for analysis %s", aid)
 
@@ -498,7 +448,7 @@ async def analyze_local_path(
         except Exception:
             # if storing meta fails, log to disk
             try:
-                await _write_error_file(database_path, aid, "meta/uv_detected_write_failed.error.txt", "Failed to store uv_detected.json in DB", "error")
+                print("Failed to store uv_detected.json in DB")
             except Exception:
                 logger.exception("Failed to write uv_detected meta error to disk for analysis %s", aid)
 

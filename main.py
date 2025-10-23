@@ -17,6 +17,7 @@ MAX_FILE_SIZE = int(CFG.get("max_file_size", 200000))
 
 # Controls how many characters of each snippet and total context we send to coding model
 TOTAL_CONTEXT_LIMIT = 4000
+_ANALYSES_CACHE = []
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -37,10 +38,22 @@ def index(request: Request):
 
 @app.get("/analyses/status")
 def analyses_status():
+    global _ANALYSES_CACHE
     try:
         analyses = list_analyses(DATABASE)
+        # If the DB returned a non-empty list, update cache and return it.
+        if analyses:
+            _ANALYSES_CACHE = analyses
+            return JSONResponse(analyses)
+        # If DB returned empty but we have a cached non-empty list, return cache
+        if not analyses and _ANALYSES_CACHE:
+            return JSONResponse(_ANALYSES_CACHE)
+        # else return whatever (empty list) — first-run or truly empty
         return JSONResponse(analyses)
     except Exception as e:
+        # On DB errors (e.g., locked) return last known cache to avoid empty responses spam.
+        if _ANALYSES_CACHE:
+            return JSONResponse(_ANALYSES_CACHE)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
