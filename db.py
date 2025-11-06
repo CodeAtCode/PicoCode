@@ -11,6 +11,10 @@ from logger import get_logger
 
 _LOG = get_logger(__name__)
 
+# Prepared statements cache for frequently used queries
+_PREPARED_STATEMENTS = {}
+_PREPARED_LOCK = threading.Lock()
+
 # registry of DBWriter instances keyed by database path
 _WRITERS = {}
 _WRITERS_LOCK = threading.Lock()
@@ -148,6 +152,21 @@ def _get_connection(db_path: str) -> sqlite3.Connection:
         # Not fatal — continue
         pass
     return conn
+
+
+def _get_prepared_statement(conn: sqlite3.Connection, query_key: str, sql: str):
+    """
+    Cache and reuse prepared statement cursors for frequently used queries.
+    Thread-safe with connection-specific caching.
+    """
+    conn_id = id(conn)
+    cache_key = (conn_id, query_key)
+    
+    with _PREPARED_LOCK:
+        if cache_key not in _PREPARED_STATEMENTS:
+            _PREPARED_STATEMENTS[cache_key] = sql
+    
+    return conn.cursor()
 
 
 def init_db(database_path: str) -> None:

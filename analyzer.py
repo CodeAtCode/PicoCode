@@ -40,6 +40,8 @@ CHUNK_SIZE = 800         # characters per chunk
 CHUNK_OVERLAP = 100      # overlapping characters between chunks
 
 EMBEDDING_CONCURRENCY = 4
+# Increase batch size for parallel processing
+EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
 _THREADPOOL_WORKERS = max(16, EMBEDDING_CONCURRENCY + 8)
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_THREADPOOL_WORKERS)
 
@@ -318,19 +320,35 @@ def _process_file_sync(
 
         embedded_any = False
 
+        # Collect all chunks first for batch processing
+        chunk_tasks = []
         for idx, chunk in enumerate(chunks):
             chunk_doc = Document(text=chunk, extra_info={"path": rel_path, "lang": lang, "chunk_index": idx, "chunk_count": len(chunks)})
+            chunk_tasks.append((idx, chunk_doc))
 
-            # Acquire semaphore to bound concurrent embedding requests
-            semaphore.acquire()
-            try:
-                emb = None
+        # Process embeddings in parallel batches for better throughput
+        for batch_start in range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE):
+            batch = chunk_tasks[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
+            embedding_futures = []
+            
+            for idx, chunk_doc in batch:
+                # Acquire semaphore to bound concurrent embedding requests
+                semaphore.acquire()
                 try:
-                    emb = get_embedding_for_text(chunk_doc.text, model=embedding_model)
+                    future = _EXECUTOR.submit(get_embedding_for_text, chunk_doc.text, embedding_model)
+                    embedding_futures.append((idx, chunk_doc, future))
+                except Exception:
+                    semaphore.release()
+                    raise
+
+            # Wait for batch to complete and store results
+            for idx, chunk_doc, future in embedding_futures:
+                try:
+                    emb = future.result()  # This will re-raise any exception from the worker
                 except Exception as e:
                     logger.exception("Embedding retrieval failed for %s chunk %d: %s", rel_path, idx, e)
+                    emb = None
                 finally:
-                    # release semaphore as soon as embedding call completes
                     semaphore.release()
 
                 if emb:
@@ -354,14 +372,6 @@ def _process_file_sync(
                         print(err_content)
                     except Exception:
                         logger.exception("Failed to write empty-embedding error to disk for %s chunk %d", rel_path, idx)
-
-            except Exception:
-                # ensure semaphore is released on unexpected exception
-                try:
-                    semaphore.release()
-                except Exception:
-                    pass
-                raise
 
         return {"stored": True, "embedded": embedded_any}
     except Exception:
