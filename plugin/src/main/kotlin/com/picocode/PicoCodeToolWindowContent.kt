@@ -1,6 +1,5 @@
 package com.picocode
 
-import com.intellij.ide.passwordSafe.PasswordSafe
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -10,14 +9,8 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
-import org.java_websocket.client.WebSocketClient
-import org.java_websocket.handshake.ServerHandshake
 import java.awt.BorderLayout
-import java.awt.event.ActionEvent
-import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
-import java.net.URI
 import javax.swing.*
 import java.net.HttpURLConnection
 import java.net.URL
@@ -25,254 +18,91 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 
 /**
- * Main tool window content for PicoCode RAG Assistant
- * Communicates with PicoCode backend only (no direct OpenAI calls)
+ * PicoCode RAG Chat Window
+ * Simple chat interface that communicates with PicoCode backend
+ * Assumes PicoCode server is already running
  */
 class PicoCodeToolWindowContent(private val project: Project) {
-    // PicoCode server configuration
+    // PicoCode server configuration (only host and port needed)
     private val serverHostField = JBTextField("localhost")
     private val serverPortField = JBTextField("8000")
-    private var serverProcess: Process? = null
     
-    // UI Components
-    private val queryField = JBTextArea(3, 40)
-    private val responseArea = JBTextArea(20, 40)
-    private val statusLabel = JLabel("Server: Not running")
-    private val progressBar = JProgressBar()
-    private val retrievedFilesPanel = JPanel()
+    // Chat components
+    private val chatArea = JBTextArea(25, 60)
+    private val inputField = JBTextArea(3, 60)
     
     private val gson = Gson()
+    private val chatHistory = mutableListOf<Pair<String, String>>() // (query, response)
     
     init {
-        responseArea.isEditable = false
-        responseArea.lineWrap = true
-        retrievedFilesPanel.layout = BoxLayout(retrievedFilesPanel, BoxLayout.Y_AXIS)
-        progressBar.isIndeterminate = false
-        progressBar.isVisible = false
+        chatArea.isEditable = false
+        chatArea.lineWrap = true
+        chatArea.wrapStyleWord = true
+        inputField.lineWrap = true
+        inputField.wrapStyleWord = true
     }
     
-    private fun getServerHost(): String = serverHostField.text.trim()
+    private fun getServerHost(): String = serverHostField.text.trim().ifEmpty { "localhost" }
     private fun getServerPort(): Int = serverPortField.text.trim().toIntOrNull() ?: 8000
     
     fun getContent(): JComponent {
         val panel = JPanel(BorderLayout())
         
-        // Top panel with PicoCode server configuration
+        // Server config panel (collapsed by default)
         val configPanel = FormBuilder.createFormBuilder()
             .addLabeledComponent("PicoCode Host:", serverHostField)
             .addLabeledComponent("PicoCode Port:", serverPortField)
             .panel
         
-        // Control buttons
+        // Chat display area
+        val chatScrollPane = JBScrollPane(chatArea)
+        chatScrollPane.border = BorderFactory.createTitledBorder("Chat")
+        
+        // Input area with buttons
+        val inputPanel = JPanel(BorderLayout())
+        val inputScrollPane = JBScrollPane(inputField)
+        
         val buttonPanel = JPanel()
-        val startServerBtn = JButton("Start Server")
-        val stopServerBtn = JButton("Stop Server")
-        val indexProjectBtn = JButton("Index Project")
-        val queryBtn = JButton("Query")
+        val sendBtn = JButton("Send")
+        val clearBtn = JButton("Clear History")
         
-        stopServerBtn.isEnabled = false
-        indexProjectBtn.isEnabled = false
-        queryBtn.isEnabled = false
-        
-        startServerBtn.addActionListener {
-            startServer()
-            startServerBtn.isEnabled = false
-            stopServerBtn.isEnabled = true
-            indexProjectBtn.isEnabled = true
-            queryBtn.isEnabled = true
+        sendBtn.addActionListener {
+            sendMessage()
         }
         
-        stopServerBtn.addActionListener {
-            stopServer()
-            startServerBtn.isEnabled = true
-            stopServerBtn.isEnabled = false
-            indexProjectBtn.isEnabled = false
-            queryBtn.isEnabled = false
+        clearBtn.addActionListener {
+            clearHistory()
         }
         
-        indexProjectBtn.addActionListener {
-            indexProject()
-        }
+        // Enter key to send
+        inputField.inputMap.put(KeyStroke.getKeyStroke("control ENTER"), "send")
+        inputField.actionMap.put("send", object : AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent?) {
+                sendMessage()
+            }
+        })
         
-        queryBtn.addActionListener {
-            executeQuery()
-        }
+        buttonPanel.add(sendBtn)
+        buttonPanel.add(clearBtn)
         
-        buttonPanel.add(startServerBtn)
-        buttonPanel.add(stopServerBtn)
-        buttonPanel.add(indexProjectBtn)
-        buttonPanel.add(queryBtn)
+        inputPanel.add(JLabel("Your question (Ctrl+Enter to send):"), BorderLayout.NORTH)
+        inputPanel.add(inputScrollPane, BorderLayout.CENTER)
+        inputPanel.add(buttonPanel, BorderLayout.SOUTH)
         
-        // Query panel
-        val queryPanel = JPanel(BorderLayout())
-        queryPanel.add(JLabel("Ask a question:"), BorderLayout.NORTH)
-        queryPanel.add(JBScrollPane(queryField), BorderLayout.CENTER)
-        
-        // Response panel with retrieved files
-        val responsePanel = JPanel(BorderLayout())
-        responsePanel.add(JLabel("Response:"), BorderLayout.NORTH)
-        responsePanel.add(JBScrollPane(responseArea), BorderLayout.CENTER)
-        
-        val retrievedPanel = JPanel(BorderLayout())
-        retrievedPanel.add(JLabel("Retrieved Files:"), BorderLayout.NORTH)
-        retrievedPanel.add(JBScrollPane(retrievedFilesPanel), BorderLayout.CENTER)
-        
-        // Main content
-        val mainPanel = JPanel(BorderLayout())
-        mainPanel.add(configPanel, BorderLayout.NORTH)
-        mainPanel.add(buttonPanel, BorderLayout.CENTER)
-        
-        val splitPane = JSplitPane(JSplitPane.VERTICAL_SPLIT)
-        splitPane.topComponent = queryPanel
-        splitPane.bottomComponent = responsePanel
-        splitPane.dividerLocation = 100
-        
-        val splitPane2 = JSplitPane(JSplitPane.VERTICAL_SPLIT)
-        splitPane2.topComponent = splitPane
-        splitPane2.bottomComponent = retrievedPanel
-        splitPane2.dividerLocation = 400
-        
-        panel.add(mainPanel, BorderLayout.NORTH)
-        panel.add(splitPane2, BorderLayout.CENTER)
-        panel.add(statusLabel, BorderLayout.SOUTH)
-        panel.add(progressBar, BorderLayout.PAGE_END)
+        // Layout
+        panel.add(configPanel, BorderLayout.NORTH)
+        panel.add(chatScrollPane, BorderLayout.CENTER)
+        panel.add(inputPanel, BorderLayout.SOUTH)
         
         return panel
     }
     
     /**
-     * Start the Python server in the project root directory
+     * Send a message to PicoCode backend
      */
-    private fun startServer() {
-        val projectPath = project.basePath ?: return
-        val host = getServerHost()
-        val port = getServerPort()
-        
-        statusLabel.text = "Server: Starting..."
-        
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                val pythonCmd = if (System.getProperty("os.name").lowercase().contains("win")) {
-                    "python"
-                } else {
-                    "python3"
-                }
-                
-                val processBuilder = ProcessBuilder(pythonCmd, "main.py")
-                processBuilder.directory(File(projectPath))
-                processBuilder.redirectErrorStream(true)
-                
-                serverProcess = processBuilder.start()
-                
-                // Read server output
-                val reader = BufferedReader(InputStreamReader(serverProcess!!.inputStream))
-                Thread {
-                    try {
-                        var line: String?
-                        while (reader.readLine().also { line = it } != null) {
-                            println("Server: $line")
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }.start()
-                
-                // Wait for server to start
-                Thread.sleep(3000)
-                
-                SwingUtilities.invokeLater {
-                    statusLabel.text = "Server: Running on http://$host:$port"
-                }
-            } catch (e: Exception) {
-                SwingUtilities.invokeLater {
-                    statusLabel.text = "Server: Failed to start - ${e.message}"
-                    JOptionPane.showMessageDialog(null, "Failed to start server: ${e.message}")
-                }
-            }
-        }
-    }
-    
-    /**
-     * Stop the Python server
-     */
-    private fun stopServer() {
-        serverProcess?.destroy()
-        serverProcess = null
-        statusLabel.text = "Server: Stopped"
-    }
-    
-    /**
-     * Index the current project via PicoCode backend
-     */
-    private fun indexProject() {
-        val projectPath = project.basePath ?: return
-        val host = getServerHost()
-        val port = getServerPort()
-        
-        progressBar.isVisible = true
-        progressBar.isIndeterminate = true
-        statusLabel.text = "Indexing project..."
-        
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                // Create/get project
-                val url = URL("http://$host:$port/api/projects")
-                val connection = url.openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.doOutput = true
-                
-                val jsonBody = gson.toJson(mapOf(
-                    "path" to projectPath,
-                    "name" to project.name
-                ))
-                
-                connection.outputStream.use { it.write(jsonBody.toByteArray()) }
-                
-                val responseCode = connection.responseCode
-                val response = connection.inputStream.bufferedReader().readText()
-                
-                if (responseCode == 200) {
-                    val jsonResponse = gson.fromJson(response, JsonObject::class.java)
-                    val projectId = jsonResponse.get("id").asString
-                    
-                    // Start indexing
-                    val indexUrl = URL("http://$host:$port/api/projects/index")
-                    val indexConnection = indexUrl.openConnection() as HttpURLConnection
-                    indexConnection.requestMethod = "POST"
-                    indexConnection.setRequestProperty("Content-Type", "application/json")
-                    indexConnection.doOutput = true
-                    
-                    val indexBody = gson.toJson(mapOf("project_id" to projectId))
-                    indexConnection.outputStream.use { it.write(indexBody.toByteArray()) }
-                    
-                    val indexResponse = indexConnection.inputStream.bufferedReader().readText()
-                    
-                    SwingUtilities.invokeLater {
-                        progressBar.isVisible = false
-                        statusLabel.text = "Project indexed successfully"
-                        JOptionPane.showMessageDialog(null, "Project indexed successfully")
-                    }
-                } else {
-                    throw Exception("Server returned error: $responseCode - $response")
-                }
-            } catch (e: Exception) {
-                SwingUtilities.invokeLater {
-                    progressBar.isVisible = false
-                    statusLabel.text = "Indexing failed: ${e.message}"
-                    JOptionPane.showMessageDialog(null, "Indexing failed: ${e.message}")
-                }
-            }
-        }
-    }
-    
-    /**
-     * Execute a query via PicoCode backend /code endpoint
-     */
-    private fun executeQuery() {
-        val query = queryField.text.trim()
+    private fun sendMessage() {
+        val query = inputField.text.trim()
         if (query.isEmpty()) {
-            JOptionPane.showMessageDialog(null, "Please enter a question")
             return
         }
         
@@ -280,23 +110,30 @@ class PicoCodeToolWindowContent(private val project: Project) {
         val host = getServerHost()
         val port = getServerPort()
         
-        responseArea.text = ""
-        retrievedFilesPanel.removeAll()
-        statusLabel.text = "Querying..."
+        // Add user message to chat
+        appendToChat("You", query)
+        inputField.text = ""
         
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                // Get project ID first
+                // Get or create project
                 val projectsUrl = URL("http://$host:$port/api/projects")
-                val connection = projectsUrl.openConnection() as HttpURLConnection
-                val projectsResponse = connection.inputStream.bufferedReader().readText()
-                val projects = gson.fromJson(projectsResponse, Array<JsonObject>::class.java)
+                val createConnection = projectsUrl.openConnection() as HttpURLConnection
+                createConnection.requestMethod = "POST"
+                createConnection.setRequestProperty("Content-Type", "application/json")
+                createConnection.doOutput = true
                 
-                val currentProject = projects.find { it.get("path").asString == projectPath }
-                val projectId = currentProject?.get("id")?.asString 
-                    ?: throw Exception("Project not indexed. Please index first.")
+                val createBody = gson.toJson(mapOf(
+                    "path" to projectPath,
+                    "name" to project.name
+                ))
+                createConnection.outputStream.use { it.write(createBody.toByteArray()) }
                 
-                // Use /code endpoint with project_id (backend will handle finding the analysis)
+                val createResponse = createConnection.inputStream.bufferedReader().readText()
+                val projectData = gson.fromJson(createResponse, JsonObject::class.java)
+                val projectId = projectData.get("id").asString
+                
+                // Send query to /code endpoint
                 val queryUrl = URL("http://$host:$port/code")
                 val queryConnection = queryUrl.openConnection() as HttpURLConnection
                 queryConnection.requestMethod = "POST"
@@ -318,49 +155,53 @@ class PicoCodeToolWindowContent(private val project: Project) {
                 val answer = jsonResponse.get("response")?.asString ?: "No response"
                 val usedContext = jsonResponse.getAsJsonArray("used_context")
                 
+                // Add response to chat
                 SwingUtilities.invokeLater {
-                    responseArea.text = answer
-                    statusLabel.text = "Query completed"
+                    appendToChat("PicoCode", answer)
                     
-                    // Display retrieved files
-                    usedContext?.forEach { ctx ->
-                        val ctxObj = ctx.asJsonObject
-                        val filePath = ctxObj.get("path")?.asString ?: ""
-                        val score = ctxObj.get("score")?.asFloat ?: 0f
-                        
-                        val fileButton = JButton("$filePath (score: ${String.format("%.4f", score)})")
-                        fileButton.addActionListener {
-                            openFileInEditor(filePath)
+                    // Add file references if any
+                    usedContext?.let { contexts ->
+                        if (contexts.size() > 0) {
+                            val fileRefs = StringBuilder("\n📎 Referenced files:\n")
+                            contexts.forEach { ctx ->
+                                val ctxObj = ctx.asJsonObject
+                                val filePath = ctxObj.get("path")?.asString ?: ""
+                                val score = ctxObj.get("score")?.asFloat ?: 0f
+                                fileRefs.append("  • $filePath (${String.format("%.3f", score)})\n")
+                            }
+                            chatArea.append(fileRefs.toString())
                         }
-                        retrievedFilesPanel.add(fileButton)
                     }
-                    retrievedFilesPanel.revalidate()
-                    retrievedFilesPanel.repaint()
+                    
+                    chatHistory.add(Pair(query, answer))
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
-                    statusLabel.text = "Query failed: ${e.message}"
-                    responseArea.text = "Error: ${e.message}"
+                    appendToChat("Error", "Failed to communicate with PicoCode: ${e.message}\n" +
+                        "Make sure PicoCode server is running on http://$host:$port")
                 }
             }
         }
     }
     
     /**
-     * Open a file in the editor and optionally highlight a region
+     * Clear chat history
      */
-    private fun openFileInEditor(relativePath: String) {
-        val projectPath = project.basePath ?: return
-        val fullPath = File(projectPath, relativePath).absolutePath
-        
-        ApplicationManager.getApplication().invokeLater {
-            val virtualFile = LocalFileSystem.getInstance().findFileByPath(fullPath)
-            if (virtualFile != null) {
-                val descriptor = OpenFileDescriptor(project, virtualFile)
-                FileEditorManager.getInstance(project).openTextEditor(descriptor, true)
-            } else {
-                JOptionPane.showMessageDialog(null, "File not found: $fullPath")
+    private fun clearHistory() {
+        chatHistory.clear()
+        chatArea.text = ""
+    }
+    
+    /**
+     * Append a message to the chat area
+     */
+    private fun appendToChat(sender: String, message: String) {
+        SwingUtilities.invokeLater {
+            if (chatArea.text.isNotEmpty()) {
+                chatArea.append("\n\n")
             }
+            chatArea.append("[$sender]\n$message")
+            chatArea.caretPosition = chatArea.document.length
         }
     }
 }
