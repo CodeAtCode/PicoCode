@@ -26,19 +26,15 @@ import com.google.gson.JsonObject
 
 /**
  * Main tool window content for PicoCode RAG Assistant
- * Handles server lifecycle, API key management, and streaming responses
+ * Communicates with PicoCode backend only (no direct OpenAI calls)
  */
 class PicoCodeToolWindowContent(private val project: Project) {
-    private val serverPort = 8000
-    private val serverHost = "localhost"
+    // PicoCode server configuration
+    private val serverHostField = JBTextField("localhost")
+    private val serverPortField = JBTextField("8000")
     private var serverProcess: Process? = null
-    private var wsClient: WebSocketClient? = null
     
     // UI Components
-    private val apiKeyField = JPasswordField(20)
-    private val apiBaseField = JBTextField("https://api.openai.com/v1")
-    private val embeddingModelField = JBTextField("text-embedding-3-small")
-    private val codingModelField = JBTextField("gpt-4")
     private val queryField = JBTextArea(3, 40)
     private val responseArea = JBTextArea(20, 40)
     private val statusLabel = JLabel("Server: Not running")
@@ -53,20 +49,18 @@ class PicoCodeToolWindowContent(private val project: Project) {
         retrievedFilesPanel.layout = BoxLayout(retrievedFilesPanel, BoxLayout.Y_AXIS)
         progressBar.isIndeterminate = false
         progressBar.isVisible = false
-        
-        // Load saved API key from IDE password safe
-        loadApiKey()
     }
+    
+    private fun getServerHost(): String = serverHostField.text.trim()
+    private fun getServerPort(): Int = serverPortField.text.trim().toIntOrNull() ?: 8000
     
     fun getContent(): JComponent {
         val panel = JPanel(BorderLayout())
         
-        // Top panel with configuration
+        // Top panel with PicoCode server configuration
         val configPanel = FormBuilder.createFormBuilder()
-            .addLabeledComponent("API Base URL:", apiBaseField)
-            .addLabeledComponent("API Key:", apiKeyField)
-            .addLabeledComponent("Embedding Model:", embeddingModelField)
-            .addLabeledComponent("Coding Model:", codingModelField)
+            .addLabeledComponent("PicoCode Host:", serverHostField)
+            .addLabeledComponent("PicoCode Port:", serverPortField)
             .panel
         
         // Control buttons
@@ -75,7 +69,6 @@ class PicoCodeToolWindowContent(private val project: Project) {
         val stopServerBtn = JButton("Stop Server")
         val indexProjectBtn = JButton("Index Project")
         val queryBtn = JButton("Query")
-        val saveApiKeyBtn = JButton("Save API Key")
         
         stopServerBtn.isEnabled = false
         indexProjectBtn.isEnabled = false
@@ -97,11 +90,6 @@ class PicoCodeToolWindowContent(private val project: Project) {
             queryBtn.isEnabled = false
         }
         
-        saveApiKeyBtn.addActionListener {
-            saveApiKey()
-            JOptionPane.showMessageDialog(panel, "API Key saved securely")
-        }
-        
         indexProjectBtn.addActionListener {
             indexProject()
         }
@@ -114,7 +102,6 @@ class PicoCodeToolWindowContent(private val project: Project) {
         buttonPanel.add(stopServerBtn)
         buttonPanel.add(indexProjectBtn)
         buttonPanel.add(queryBtn)
-        buttonPanel.add(saveApiKeyBtn)
         
         // Query panel
         val queryPanel = JPanel(BorderLayout())
@@ -158,6 +145,8 @@ class PicoCodeToolWindowContent(private val project: Project) {
      */
     private fun startServer() {
         val projectPath = project.basePath ?: return
+        val host = getServerHost()
+        val port = getServerPort()
         
         statusLabel.text = "Server: Starting..."
         
@@ -192,7 +181,7 @@ class PicoCodeToolWindowContent(private val project: Project) {
                 Thread.sleep(3000)
                 
                 SwingUtilities.invokeLater {
-                    statusLabel.text = "Server: Running on http://$serverHost:$serverPort"
+                    statusLabel.text = "Server: Running on http://$host:$port"
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
@@ -209,17 +198,16 @@ class PicoCodeToolWindowContent(private val project: Project) {
     private fun stopServer() {
         serverProcess?.destroy()
         serverProcess = null
-        wsClient?.close()
-        wsClient = null
         statusLabel.text = "Server: Stopped"
     }
     
     /**
-     * Index the current project
+     * Index the current project via PicoCode backend
      */
     private fun indexProject() {
         val projectPath = project.basePath ?: return
-        val storeDir = File(projectPath, ".local_rag").absolutePath
+        val host = getServerHost()
+        val port = getServerPort()
         
         progressBar.isVisible = true
         progressBar.isIndeterminate = true
@@ -227,7 +215,8 @@ class PicoCodeToolWindowContent(private val project: Project) {
         
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                val url = URL("http://$serverHost:$serverPort/api/projects")
+                // Create/get project
+                val url = URL("http://$host:$port/api/projects")
                 val connection = url.openConnection() as HttpURLConnection
                 connection.requestMethod = "POST"
                 connection.setRequestProperty("Content-Type", "application/json")
@@ -248,7 +237,7 @@ class PicoCodeToolWindowContent(private val project: Project) {
                     val projectId = jsonResponse.get("id").asString
                     
                     // Start indexing
-                    val indexUrl = URL("http://$serverHost:$serverPort/api/projects/index")
+                    val indexUrl = URL("http://$host:$port/api/projects/index")
                     val indexConnection = indexUrl.openConnection() as HttpURLConnection
                     indexConnection.requestMethod = "POST"
                     indexConnection.setRequestProperty("Content-Type", "application/json")
@@ -262,7 +251,7 @@ class PicoCodeToolWindowContent(private val project: Project) {
                     SwingUtilities.invokeLater {
                         progressBar.isVisible = false
                         statusLabel.text = "Project indexed successfully"
-                        JOptionPane.showMessageDialog(null, "Project indexed. Store: $storeDir")
+                        JOptionPane.showMessageDialog(null, "Project indexed successfully")
                     }
                 } else {
                     throw Exception("Server returned error: $responseCode - $response")
@@ -278,7 +267,7 @@ class PicoCodeToolWindowContent(private val project: Project) {
     }
     
     /**
-     * Execute a query with WebSocket streaming
+     * Execute a query via PicoCode backend /code endpoint
      */
     private fun executeQuery() {
         val query = queryField.text.trim()
@@ -288,25 +277,27 @@ class PicoCodeToolWindowContent(private val project: Project) {
         }
         
         val projectPath = project.basePath ?: return
+        val host = getServerHost()
+        val port = getServerPort()
         
         responseArea.text = ""
         retrievedFilesPanel.removeAll()
         statusLabel.text = "Querying..."
         
-        // Get project ID first
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                // Get projects list to find our project
-                val projectsUrl = URL("http://$serverHost:$serverPort/api/projects")
+                // Get project ID first
+                val projectsUrl = URL("http://$host:$port/api/projects")
                 val connection = projectsUrl.openConnection() as HttpURLConnection
                 val projectsResponse = connection.inputStream.bufferedReader().readText()
                 val projects = gson.fromJson(projectsResponse, Array<JsonObject>::class.java)
                 
                 val currentProject = projects.find { it.get("path").asString == projectPath }
-                val projectId = currentProject?.get("id")?.asString ?: throw Exception("Project not found")
+                val projectId = currentProject?.get("id")?.asString 
+                    ?: throw Exception("Project not indexed. Please index first.")
                 
-                // Use synchronous query endpoint (WebSocket would require additional dependencies)
-                val queryUrl = URL("http://$serverHost:$serverPort/api/code")
+                // Use /code endpoint with project_id (backend will handle finding the analysis)
+                val queryUrl = URL("http://$host:$port/code")
                 val queryConnection = queryUrl.openConnection() as HttpURLConnection
                 queryConnection.requestMethod = "POST"
                 queryConnection.setRequestProperty("Content-Type", "application/json")
@@ -371,38 +362,5 @@ class PicoCodeToolWindowContent(private val project: Project) {
                 JOptionPane.showMessageDialog(null, "File not found: $fullPath")
             }
         }
-    }
-    
-    /**
-     * Load API key from IDE password safe
-     */
-    private fun loadApiKey() {
-        try {
-            val credentials = PasswordSafe.instance.get(
-                com.intellij.credentialStore.CredentialAttributes(
-                    "PicoCodeAPIKey",
-                    "api_key"
-                )
-            )
-            credentials?.getPasswordAsString()?.let {
-                apiKeyField.text = it
-            }
-        } catch (e: Exception) {
-            // API key not found or error, use empty
-        }
-    }
-    
-    /**
-     * Save API key to IDE password safe
-     */
-    private fun saveApiKey() {
-        val apiKey = String(apiKeyField.password)
-        PasswordSafe.instance.setPassword(
-            com.intellij.credentialStore.CredentialAttributes(
-                "PicoCodeAPIKey",
-                "api_key"
-            ),
-            apiKey
-        )
     }
 }

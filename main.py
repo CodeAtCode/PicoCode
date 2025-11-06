@@ -251,7 +251,31 @@ def code_endpoint(request: Request):
     prompt = payload["prompt"]
     explicit_context = payload.get("context", "") or ""
     use_rag = bool(payload.get("use_rag", True))
+    
+    # Support both analysis_id (old) and project_id (new for plugin)
     analysis_id = payload.get("analysis_id")
+    project_id = payload.get("project_id")
+    
+    # If project_id is provided, get the database path and find the first analysis
+    database_path = DATABASE  # default to main database
+    if project_id and not analysis_id:
+        try:
+            project = get_project_by_id(project_id)
+            if not project:
+                return JSONResponse({"error": "Project not found"}, status_code=404)
+            
+            database_path = project["database_path"]
+            
+            # Get the first analysis from this project
+            analyses = list_analyses(database_path)
+            if not analyses:
+                return JSONResponse({"error": "Project not indexed yet"}, status_code=400)
+            
+            analysis_id = analyses[0]["id"]
+        except Exception as e:
+            logger.exception(f"Error getting project analysis: {e}")
+            return JSONResponse({"error": "Failed to get project analysis"}, status_code=500)
+    
     try:
         top_k = int(payload.get("top_k", 5))
     except Exception:
@@ -263,7 +287,7 @@ def code_endpoint(request: Request):
     # If RAG requested and an analysis_id provided, perform semantic search and build context
     if use_rag and analysis_id:
         try:
-            retrieved = search_semantic(prompt, DATABASE, analysis_id=int(analysis_id), top_k=top_k)
+            retrieved = search_semantic(prompt, database_path, analysis_id=int(analysis_id), top_k=top_k)
             # Build context WITHOUT including snippets: only include file references and scores
             context_parts = []
             total_len = len(combined_context)
