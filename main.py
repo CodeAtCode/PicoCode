@@ -52,16 +52,40 @@ async def lifespan(app: FastAPI):
     
     yield
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    title="PicoCode API",
+    description="Local Codebase Assistant with RAG (Retrieval-Augmented Generation). "
+                "Index codebases, perform semantic search, and query with AI assistance.",
+    version="0.2.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_tags=[
+        {"name": "projects", "description": "Project management operations"},
+        {"name": "indexing", "description": "Code indexing operations"},
+        {"name": "query", "description": "Semantic search and code queries"},
+        {"name": "health", "description": "Health and status checks"},
+    ]
+)
 templates = Jinja2Templates(directory="templates")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # Project Management API (PyCharm-compatible)
-@app.post("/api/projects")
+@app.post("/api/projects", tags=["projects"], summary="Create or get a project")
 def api_create_project(request: CreateProjectRequest):
-    """Create or get a project with per-project database."""
+    """
+    Create or get a project with per-project database.
+    
+    - **path**: Absolute path to project directory (required)
+    - **name**: Optional project name (defaults to directory name)
+    
+    Returns project metadata including:
+    - **id**: Unique project identifier
+    - **database_path**: Path to project's SQLite database
+    - **status**: Current project status
+    """
     
     try:
         # Validate input
@@ -83,9 +107,18 @@ def api_create_project(request: CreateProjectRequest):
         return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
-@app.get("/api/projects")
+@app.get("/api/projects", tags=["projects"], summary="List all projects")
 def api_list_projects():
-    """List all projects."""
+    """
+    List all registered projects.
+    
+    Returns array of project objects with metadata:
+    - **id**: Unique project identifier  
+    - **name**: Project name
+    - **path**: Project directory path
+    - **status**: Current status (created, indexing, ready, error)
+    - **last_indexed_at**: Last indexing timestamp
+    """
     try:
         projects = list_projects()
         return JSONResponse(projects)
@@ -94,9 +127,15 @@ def api_list_projects():
         return JSONResponse({"error": "Failed to list projects"}, status_code=500)
 
 
-@app.get("/api/projects/{project_id}")
+@app.get("/api/projects/{project_id}", tags=["projects"], summary="Get project by ID")
 def api_get_project(project_id: str):
-    """Get project details by ID."""
+    """
+    Get project details by ID.
+    
+    - **project_id**: Unique project identifier
+    
+    Returns project metadata or 404 if not found.
+    """
     try:
         project = get_project_by_id(project_id)
         if not project:
@@ -107,9 +146,16 @@ def api_get_project(project_id: str):
         return JSONResponse({"error": "Failed to retrieve project"}, status_code=500)
 
 
-@app.delete("/api/projects/{project_id}")
+@app.delete("/api/projects/{project_id}", tags=["projects"], summary="Delete a project")
 def api_delete_project(project_id: str):
-    """Delete a project and its database."""
+    """
+    Delete a project and its database.
+    
+    - **project_id**: Unique project identifier
+    
+    Permanently removes the project and all indexed data.
+    Returns 404 if project not found.
+    """
     try:
         delete_project(project_id)
         return JSONResponse({"success": True})
@@ -121,9 +167,23 @@ def api_delete_project(project_id: str):
         return JSONResponse({"error": "Failed to delete project"}, status_code=500)
 
 
-@app.post("/api/projects/index")
+@app.post("/api/projects/index", tags=["indexing"], summary="Index a project")
 def api_index_project(http_request: Request, request: IndexProjectRequest, background_tasks: BackgroundTasks):
-    """Index/re-index a project in the background."""
+    """
+    Index or re-index a project in the background.
+    
+    - **project_id**: Unique project identifier
+    
+    Starts background indexing process:
+    - Scans project directory for code files
+    - Generates embeddings for semantic search
+    - Uses incremental indexing (skips unchanged files)
+    
+    Rate limit: 10 requests per minute per IP.
+    
+    Returns immediately with status "indexing".
+    Poll project status to check completion.
+    """
     # Rate limiting for indexing operations (more strict)
     client_ip = _get_client_ip(http_request)
     allowed, retry_after = indexing_limiter.is_allowed(client_ip)
@@ -167,9 +227,27 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
         return JSONResponse({"error": "Failed to start indexing"}, status_code=500)
 
 
-@app.post("/api/query")
+@app.post("/api/query", tags=["query"], summary="Semantic search query")
 def api_query(http_request: Request, request: QueryRequest):
-    """Query a project using semantic search (PyCharm-compatible)."""
+    """
+    Query a project using semantic search.
+    
+    - **project_id**: Unique project identifier
+    - **query**: Search query text
+    - **top_k**: Number of results to return (default: 5, max: 20)
+    
+    Performs semantic search using vector embeddings:
+    - Generates embedding for query
+    - Finds most similar code chunks
+    - Returns ranked results with scores
+    
+    Rate limit: 100 requests per minute per IP.
+    
+    Returns:
+    - **results**: Array of matching code chunks
+    - **project_id**: Project identifier
+    - **query**: Original query text
+    """
     # Rate limiting
     client_ip = _get_client_ip(http_request)
     allowed, retry_after = query_limiter.is_allowed(client_ip)
@@ -206,13 +284,25 @@ def api_query(http_request: Request, request: QueryRequest):
 
 
 
-@app.get("/api/health")
+@app.get("/api/health", tags=["health"], summary="Health check")
 def api_health():
-    """Health check endpoint."""
+    """
+    Health check endpoint for monitoring and status verification.
+    
+    Returns:
+    - **status**: "ok" if service is running
+    - **version**: API version
+    - **features**: List of enabled features
+    
+    Use this endpoint for:
+    - Load balancer health checks
+    - Monitoring systems
+    - Service availability verification
+    """
     return JSONResponse({
         "status": "ok",
         "version": "0.2.0",
-        "features": ["rag", "per-project-db", "pycharm-api"]
+        "features": ["rag", "per-project-db", "pycharm-api", "incremental-indexing", "rate-limiting", "caching"]
     })
 
 
