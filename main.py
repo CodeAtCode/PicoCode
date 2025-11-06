@@ -61,11 +61,25 @@ class CodeCompletionRequest(BaseModel):
 @app.post("/api/projects")
 def api_create_project(request: CreateProjectRequest):
     """Create or get a project with per-project database."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
+        # Validate input
+        if not request.path:
+            return JSONResponse({"error": "Project path is required"}, status_code=400)
+        
         project = get_or_create_project(request.path, request.name)
         return JSONResponse(project)
-    except Exception as e:
+    except ValueError as e:
+        logger.warning(f"Validation error creating project: {e}")
         return JSONResponse({"error": str(e)}, status_code=400)
+    except RuntimeError as e:
+        logger.error(f"Runtime error creating project: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    except Exception as e:
+        logger.exception(f"Unexpected error creating project: {e}")
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
 @app.get("/api/projects")

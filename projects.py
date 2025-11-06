@@ -6,17 +6,51 @@ import os
 import json
 import sqlite3
 import hashlib
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Default projects directory
 PROJECTS_DIR = os.path.expanduser("~/.picocode/projects")
+
+# Retry configuration for database operations
+DB_RETRY_COUNT = 3
+DB_RETRY_DELAY = 0.1  # seconds
 
 
 def _ensure_projects_dir():
     """Ensure projects directory exists."""
-    os.makedirs(PROJECTS_DIR, exist_ok=True)
+    try:
+        os.makedirs(PROJECTS_DIR, exist_ok=True)
+    except Exception as e:
+        logger.error(f"Failed to create projects directory {PROJECTS_DIR}: {e}")
+        raise
+
+
+def _retry_on_db_locked(func, *args, max_retries=DB_RETRY_COUNT, **kwargs):
+    """Retry a database operation if it's locked."""
+    import time
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                last_error = e
+                time.sleep(DB_RETRY_DELAY * (2 ** attempt))  # Exponential backoff
+                continue
+            raise
+        except Exception as e:
+            raise
+    
+    if last_error:
+        raise last_error
 
 
 def _get_project_id(project_path: str) -> str:
@@ -37,29 +71,44 @@ def _get_projects_registry_path() -> str:
 
 
 def _init_registry_db():
-    """Initialize the projects registry database."""
+    """Initialize the projects registry database with proper configuration."""
     registry_path = _get_projects_registry_path()
-    conn = sqlite3.connect(registry_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS projects (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                path TEXT NOT NULL UNIQUE,
-                database_path TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now')),
-                last_indexed_at TEXT,
-                status TEXT DEFAULT 'created',
-                settings TEXT
+    
+    def _init():
+        conn = sqlite3.connect(registry_path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            # Enable WAL mode for better concurrency
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            
+            cur = conn.cursor()
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    path TEXT NOT NULL UNIQUE,
+                    database_path TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    last_indexed_at TEXT,
+                    status TEXT DEFAULT 'created',
+                    settings TEXT
+                )
+                """
             )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to initialize registry database: {e}")
+            raise
+        finally:
+            conn.close()
+    
+    try:
+        _retry_on_db_locked(_init)
+    except Exception as e:
+        logger.error(f"Failed to initialize registry after retries: {e}")
+        raise
 
 
 def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, Any]:
@@ -72,11 +121,25 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
     
     Returns:
         Project metadata dictionary
-    """
-    _init_registry_db()
     
-    # Normalize path
-    project_path = os.path.abspath(project_path)
+    Raises:
+        ValueError: If project path is invalid
+        RuntimeError: If database operations fail
+    """
+    try:
+        _init_registry_db()
+    except Exception as e:
+        logger.error(f"Failed to initialize registry: {e}")
+        raise RuntimeError(f"Database initialization failed: {e}")
+    
+    # Validate and normalize path
+    if not project_path or not isinstance(project_path, str):
+        raise ValueError("Project path must be a non-empty string")
+    
+    try:
+        project_path = os.path.abspath(project_path)
+    except Exception as e:
+        raise ValueError(f"Invalid project path: {e}")
     
     if not os.path.exists(project_path):
         raise ValueError(f"Project path does not exist: {project_path}")
@@ -92,38 +155,59 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
     if not name:
         name = os.path.basename(project_path)
     
+    # Sanitize project name
+    if name and len(name) > 255:
+        name = name[:255]
+    
     registry_path = _get_projects_registry_path()
-    conn = sqlite3.connect(registry_path)
-    conn.row_factory = sqlite3.Row
+    
+    def _create():
+        conn = sqlite3.connect(registry_path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor()
+            
+            # Check if project already exists
+            cur.execute("SELECT * FROM projects WHERE path = ?", (project_path,))
+            existing = cur.fetchone()
+            if existing:
+                logger.info(f"Project already exists: {project_path}")
+                return dict(existing)
+            
+            # Insert new project
+            cur.execute(
+                """
+                INSERT INTO projects (id, name, path, database_path, status)
+                VALUES (?, ?, ?, ?, 'created')
+                """,
+                (project_id, name, project_path, db_path)
+            )
+            conn.commit()
+            
+            # Initialize project database
+            try:
+                from db import init_db
+                init_db(db_path)
+                logger.info(f"Created project {project_id} at {db_path}")
+            except Exception as e:
+                logger.error(f"Failed to initialize project database: {e}")
+                # Rollback project creation
+                cur.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+                conn.commit()
+                raise RuntimeError(f"Failed to initialize project database: {e}")
+            
+            # Return project metadata
+            cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+    
     try:
-        cur = conn.cursor()
-        
-        # Check if project already exists
-        cur.execute("SELECT * FROM projects WHERE path = ?", (project_path,))
-        existing = cur.fetchone()
-        if existing:
-            return dict(existing)
-        
-        # Insert new project
-        cur.execute(
-            """
-            INSERT INTO projects (id, name, path, database_path, status)
-            VALUES (?, ?, ?, ?, 'created')
-            """,
-            (project_id, name, project_path, db_path)
-        )
-        conn.commit()
-        
-        # Initialize project database
-        from db import init_db
-        init_db(db_path)
-        
-        # Return project metadata
-        cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
-        row = cur.fetchone()
-        return dict(row)
-    finally:
-        conn.close()
+        return _retry_on_db_locked(_create)
+    except Exception as e:
+        logger.error(f"Failed to create project: {e}")
+        raise
 
 
 def get_project(project_path: str) -> Optional[Dict[str, Any]]:
