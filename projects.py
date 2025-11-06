@@ -136,16 +136,28 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
     if not project_path or not isinstance(project_path, str):
         raise ValueError("Project path must be a non-empty string")
     
+    # Check for path traversal attempts
+    if ".." in project_path or project_path.startswith("~"):
+        raise ValueError("Path traversal not allowed in project path")
+    
     try:
-        project_path = os.path.abspath(project_path)
+        # Normalize and validate path - prevents path traversal
+        project_path = os.path.abspath(os.path.realpath(project_path))
     except Exception as e:
         raise ValueError(f"Invalid project path: {e}")
     
-    if not os.path.exists(project_path):
-        raise ValueError(f"Project path does not exist: {project_path}")
-    
-    if not os.path.isdir(project_path):
-        raise ValueError(f"Project path is not a directory: {project_path}")
+    # Additional validation: path must exist and be a directory
+    try:
+        if not os.path.exists(project_path):
+            raise ValueError(f"Project path does not exist: {project_path}")
+        
+        if not os.path.isdir(project_path):
+            raise ValueError(f"Project path is not a directory: {project_path}")
+    except (OSError, ValueError) as e:
+        # Re-raise ValueError, wrap OSError
+        if isinstance(e, ValueError):
+            raise
+        raise ValueError(f"Cannot access project path: {str(e)}")
     
     # Generate project ID and database path
     project_id = _get_project_id(project_path)

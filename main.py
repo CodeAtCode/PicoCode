@@ -72,11 +72,13 @@ def api_create_project(request: CreateProjectRequest):
         project = get_or_create_project(request.path, request.name)
         return JSONResponse(project)
     except ValueError as e:
+        # ValueError is expected for invalid inputs, safe to show message
         logger.warning(f"Validation error creating project: {e}")
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse({"error": "Invalid project path"}, status_code=400)
     except RuntimeError as e:
+        # RuntimeError may contain sensitive details, use generic message
         logger.error(f"Runtime error creating project: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Database operation failed"}, status_code=500)
     except Exception as e:
         logger.exception(f"Unexpected error creating project: {e}")
         return JSONResponse({"error": "Internal server error"}, status_code=500)
@@ -85,38 +87,52 @@ def api_create_project(request: CreateProjectRequest):
 @app.get("/api/projects")
 def api_list_projects():
     """List all projects."""
+    import logging
+    logger = logging.getLogger(__name__)
     try:
         projects = list_projects()
         return JSONResponse(projects)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception(f"Error listing projects: {e}")
+        return JSONResponse({"error": "Failed to list projects"}, status_code=500)
 
 
 @app.get("/api/projects/{project_id}")
 def api_get_project(project_id: str):
     """Get project details by ID."""
+    import logging
+    logger = logging.getLogger(__name__)
     try:
         project = get_project_by_id(project_id)
         if not project:
             return JSONResponse({"error": "Project not found"}, status_code=404)
         return JSONResponse(project)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception(f"Error getting project: {e}")
+        return JSONResponse({"error": "Failed to retrieve project"}, status_code=500)
 
 
 @app.delete("/api/projects/{project_id}")
 def api_delete_project(project_id: str):
     """Delete a project and its database."""
+    import logging
+    logger = logging.getLogger(__name__)
     try:
         delete_project(project_id)
         return JSONResponse({"success": True})
+    except ValueError as e:
+        logger.warning(f"Project not found for deletion: {e}")
+        return JSONResponse({"error": "Project not found"}, status_code=404)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        logger.exception(f"Error deleting project: {e}")
+        return JSONResponse({"error": "Failed to delete project"}, status_code=500)
 
 
 @app.post("/api/projects/index")
 def api_index_project(request: IndexProjectRequest, background_tasks: BackgroundTasks):
     """Index/re-index a project in the background."""
+    import logging
+    logger = logging.getLogger(__name__)
     try:
         project = get_project_by_id(request.project_id)
         if not project:
@@ -146,12 +162,15 @@ def api_index_project(request: IndexProjectRequest, background_tasks: Background
         
         return JSONResponse({"status": "indexing", "project_id": request.project_id})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception(f"Error starting project indexing: {e}")
+        return JSONResponse({"error": "Failed to start indexing"}, status_code=500)
 
 
 @app.post("/api/query")
 def api_query(request: QueryRequest):
     """Query a project using semantic search (PyCharm-compatible)."""
+    import logging
+    logger = logging.getLogger(__name__)
     try:
         project = get_project_by_id(request.project_id)
         if not project:
@@ -175,12 +194,15 @@ def api_query(request: QueryRequest):
             "query": request.query
         })
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception(f"Error querying project: {e}")
+        return JSONResponse({"error": "Query failed"}, status_code=500)
 
 
 @app.post("/api/code")
 def api_code_completion(request: CodeCompletionRequest):
     """Get code suggestions using RAG + LLM (PyCharm-compatible)."""
+    import logging
+    logger = logging.getLogger(__name__)
     try:
         project = get_project_by_id(request.project_id)
         if not project:
@@ -220,7 +242,8 @@ def api_code_completion(request: CodeCompletionRequest):
         try:
             response = call_coding_model(request.prompt, combined_context)
         except Exception as e:
-            return JSONResponse({"error": f"Coding model failed: {e}"}, status_code=500)
+            logger.error(f"Coding model call failed: {e}")
+            return JSONResponse({"error": "Code generation failed"}, status_code=500)
         
         return JSONResponse({
             "response": response,
@@ -228,7 +251,8 @@ def api_code_completion(request: CodeCompletionRequest):
             "project_id": request.project_id
         })
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception(f"Error in code completion: {e}")
+        return JSONResponse({"error": "Code completion failed"}, status_code=500)
 
 
 @app.get("/api/health")
