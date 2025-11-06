@@ -8,6 +8,7 @@ import atexit
 import threading
 import queue
 from logger import get_logger
+from cache import project_cache, stats_cache, file_cache
 
 _LOG = get_logger(__name__)
 
@@ -282,7 +283,14 @@ def get_project_stats(database_path: str) -> Dict[str, Any]:
     """
     Get statistics for a project database.
     Returns file_count and embedding_count.
+    Uses caching with 60s TTL.
     """
+    # Check cache first
+    cache_key = f"stats:{database_path}"
+    cached = stats_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
@@ -295,10 +303,14 @@ def get_project_stats(database_path: str) -> Dict[str, Any]:
         cur.execute("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
         embedding_count = cur.fetchone()[0]
         
-        return {
+        stats = {
             "file_count": int(file_count),
             "embedding_count": int(embedding_count)
         }
+        
+        # Cache the result
+        stats_cache.set(cache_key, stats)
+        return stats
     finally:
         conn.close()
 
@@ -330,6 +342,7 @@ def clear_project_data(database_path: str) -> None:
     """
     Clear all files and chunks from a project database.
     Used when re-indexing a project.
+    Invalidates caches.
     """
     conn = _get_connection(database_path)
     try:
@@ -339,6 +352,10 @@ def clear_project_data(database_path: str) -> None:
         # Delete files
         cur.execute("DELETE FROM files")
         conn.commit()
+        
+        # Invalidate caches
+        stats_cache.invalidate(f"stats:{database_path}")
+        file_cache.clear()  # Clear all file cache since we deleted everything
     finally:
         conn.close()
 
@@ -628,14 +645,17 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
             
             cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
             row = cur.fetchone()
-            return dict(row) if row else None
+            result = dict(row) if row else None
+            # Cache the newly created project
+            if result:
+                project_cache.set(f"project:id:{project_id}", result)
+                project_cache.set(f"project:path:{project_path}", result)
+            return result
         finally:
             conn.close()
     
     try:
         result = _retry_on_db_locked(_create)
-        # Invalidate cache after creating a new project
-        _get_project_by_id_cached.cache_clear()
         return result
     except Exception as e:
         _LOG.error(f"Failed to create project: {e}")
@@ -643,9 +663,15 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
 
 
 def get_project(project_path: str) -> Optional[Dict[str, Any]]:
-    """Get project metadata by path."""
+    """Get project metadata by path with caching."""
     _init_registry_db()
     project_path = os.path.abspath(project_path)
+    
+    # Check cache first
+    cache_key = f"project:path:{project_path}"
+    cached = project_cache.get(cache_key)
+    if cached is not None:
+        return cached
     
     registry_path = _get_projects_registry_path()
     
@@ -655,26 +681,10 @@ def get_project(project_path: str) -> Optional[Dict[str, Any]]:
             cur = conn.cursor()
             cur.execute("SELECT * FROM projects WHERE path = ?", (project_path,))
             row = cur.fetchone()
-            return dict(row) if row else None
-        finally:
-            conn.close()
-    
-    return _retry_on_db_locked(_get)
-
-
-@lru_cache(maxsize=128)
-def _get_project_by_id_cached(project_id: str, registry_path: str) -> Optional[tuple]:
-    """Internal cached function that returns immutable tuple."""
-    def _get():
-        conn = _get_connection(registry_path)
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
-            row = cur.fetchone()
-            if row:
-                # Convert row to tuple of key-value pairs for immutability
-                return tuple(dict(row).items())
-            return None
+            result = dict(row) if row else None
+            if result:
+                project_cache.set(cache_key, result)
+            return result
         finally:
             conn.close()
     
@@ -685,11 +695,28 @@ def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
     """Get project metadata by ID with caching."""
     _init_registry_db()
     
-    registry_path = _get_projects_registry_path()
-    cached_result = _get_project_by_id_cached(project_id, registry_path)
+    # Check cache first
+    cache_key = f"project:id:{project_id}"
+    cached = project_cache.get(cache_key)
+    if cached is not None:
+        return cached
     
-    # Convert tuple back to dict
-    return dict(cached_result) if cached_result else None
+    registry_path = _get_projects_registry_path()
+    
+    def _get():
+        conn = _get_connection(registry_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+            row = cur.fetchone()
+            result = dict(row) if row else None
+            if result:
+                project_cache.set(cache_key, result)
+            return result
+        finally:
+            conn.close()
+    
+    return _retry_on_db_locked(_get)
 
 
 def list_projects() -> List[Dict[str, Any]]:
@@ -737,7 +764,7 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
     
     _retry_on_db_locked(_update)
     # Invalidate cache after update
-    _get_project_by_id_cached.cache_clear()
+    project_cache.invalidate(f"project:id:{project_id}")
 
 
 def update_project_settings(project_id: str, settings: Dict[str, Any]):
@@ -761,7 +788,7 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
     
     _retry_on_db_locked(_update)
     # Invalidate cache after update
-    _get_project_by_id_cached.cache_clear()
+    project_cache.invalidate(f"project:id:{project_id}")
 
 
 def delete_project(project_id: str):
@@ -792,7 +819,9 @@ def delete_project(project_id: str):
     
     _retry_on_db_locked(_delete)
     # Invalidate cache after deletion
-    _get_project_by_id_cached.cache_clear()
+    project_cache.invalidate(f"project:id:{project_id}")
+    if project.get("path"):
+        project_cache.invalidate(f"project:path:{project['path']}")
 
 
 def get_or_create_project(project_path: str, name: Optional[str] = None) -> Dict[str, Any]:
