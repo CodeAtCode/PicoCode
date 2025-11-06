@@ -173,43 +173,27 @@ def init_db(database_path: str) -> None:
     """
     Initialize database schema. Safe to call multiple times.
     Creates:
-    - analyses (embedding_count column kept for backward compat but not used as source of truth)
-    - files
+    - files (stores full content of indexed files)
     - chunks (with embedding BLOB column for sqlite-vector)
     """
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
-        # analyses table: embedding_count column kept for compatibility but will be computed live
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS analyses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                path TEXT NOT NULL,
-                status TEXT NOT NULL,
-                embedding_count INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now'))
-            )
-            """
-        )
-
+        
         # files table (stores full content, used to reconstruct chunks)
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                analysis_id INTEGER NOT NULL,
                 path TEXT NOT NULL,
                 content TEXT,
                 language TEXT,
                 snippet TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
+                created_at TEXT DEFAULT (datetime('now'))
             )
             """
         )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_analysis ON files(analysis_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);")
 
         # chunks table: metadata for chunked documents; includes embedding BLOB column
         cur.execute(
@@ -231,39 +215,15 @@ def init_db(database_path: str) -> None:
         conn.close()
 
 
-def create_analysis(database_path: str, name: str, path: str, status: str = "pending") -> int:
-    conn = _get_connection(database_path)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO analyses (name, path, status) VALUES (?, ?, ?)",
-            (name, path, status),
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-    finally:
-        conn.close()
-
-
-def update_analysis_status(database_path: str, analysis_id: int, status: str) -> None:
-    conn = _get_connection(database_path)
-    try:
-        cur = conn.cursor()
-        cur.execute("UPDATE analyses SET status = ? WHERE id = ?", (status, analysis_id))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def store_file(database_path, analysis_id, path, content, language):
+def store_file(database_path, path, content, language):
     """
     Insert a file record into the DB using a queued single-writer to avoid
     sqlite 'database is locked' errors in multithreaded scenarios.
     Returns lastrowid (same as the previous store_file implementation).
     """
     snippet = (content[:512] if content else "")
-    sql = "INSERT INTO files (analysis_id, path, content, language, snippet) VALUES (?, ?, ?, ?, ?)"
-    params = (analysis_id, path, content, language, snippet)
+    sql = "INSERT INTO files (path, content, language, snippet) VALUES (?, ?, ?, ?)"
+    params = (path, content, language, snippet)
 
     writer = _get_writer(database_path)
     # We wait for the background writer to complete the insert and then return the row id.
@@ -289,75 +249,66 @@ def insert_chunk_row_with_null_embedding(database_path: str, file_id: int, path:
         conn.close()
 
 
-def list_analyses(database_path: str) -> List[Dict[str, Any]]:
+def get_project_stats(database_path: str) -> Dict[str, Any]:
     """
-    Return analyses with computed file_count and computed embedding_count (from chunks.embedding).
-    This ensures the UI shows accurate, up-to-date counts based on actual rows.
+    Get statistics for a project database.
+    Returns file_count and embedding_count.
     """
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
-        rows = cur.execute(
-            """
-            SELECT
-                a.id,
-                a.name,
-                a.path,
-                a.status,
-                (SELECT COUNT(*) FROM files f WHERE f.analysis_id = a.id) AS file_count,
-                (SELECT COUNT(*) FROM chunks ch JOIN files f2 ON ch.file_id = f2.id
-                    WHERE f2.analysis_id = a.id AND ch.embedding IS NOT NULL) AS embedding_count,
-                a.created_at
-            FROM analyses a
-            ORDER BY a.id DESC
-            """
-        ).fetchall()
-        results: List[Dict[str, Any]] = []
-        for r in rows:
-            results.append(
-                {
-                    "id": r["id"],
-                    "name": r["name"],
-                    "path": r["path"],
-                    "status": r["status"],
-                    "file_count": int(r["file_count"]),
-                    "embedding_count": int(r["embedding_count"]),
-                    "created_at": r["created_at"],
-                }
-            )
-        return results
+        
+        # Count files
+        cur.execute("SELECT COUNT(*) FROM files")
+        file_count = cur.fetchone()[0]
+        
+        # Count embeddings
+        cur.execute("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
+        embedding_count = cur.fetchone()[0]
+        
+        return {
+            "file_count": int(file_count),
+            "embedding_count": int(embedding_count)
+        }
     finally:
         conn.close()
 
 
-def list_files_for_analysis(database_path: str, analysis_id: int) -> List[Dict[str, Any]]:
+def list_files(database_path: str) -> List[Dict[str, Any]]:
+    """
+    List all files in a project database.
+    """
     conn = _get_connection(database_path)
     try:
         rows = conn.execute(
-            "SELECT id, path, snippet FROM files WHERE analysis_id = ? ORDER BY id DESC", (analysis_id,)
+            "SELECT id, path, snippet, language, created_at FROM files ORDER BY id DESC"
         ).fetchall()
-        return [{"id": r["id"], "path": r["path"], "snippet": r["snippet"]} for r in rows]
+        return [
+            {
+                "id": r["id"], 
+                "path": r["path"], 
+                "snippet": r["snippet"],
+                "language": r["language"],
+                "created_at": r["created_at"]
+            } 
+            for r in rows
+        ]
     finally:
         conn.close()
 
 
-def delete_analysis(database_path: str, analysis_id: int) -> None:
+def clear_project_data(database_path: str) -> None:
     """
-    Delete an analysis and cascade-delete associated files / chunks.
-    Foreign key enforcement varies by SQLite build; do explicit deletes for safety.
+    Clear all files and chunks from a project database.
+    Used when re-indexing a project.
     """
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
-        # delete chunks for files in analysis
-        cur.execute(
-            "DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE analysis_id = ?)",
-            (analysis_id,),
-        )
-        # delete files
-        cur.execute("DELETE FROM files WHERE analysis_id = ?", (analysis_id,))
-        # delete analysis row
-        cur.execute("DELETE FROM analyses WHERE id = ?", (analysis_id,))
+        # Delete chunks first due to foreign key
+        cur.execute("DELETE FROM chunks")
+        # Delete files
+        cur.execute("DELETE FROM files")
         conn.commit()
     finally:
         conn.close()

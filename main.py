@@ -9,7 +9,7 @@ import uvicorn
 from typing import Optional
 from datetime import datetime
 
-from db import init_db, list_analyses
+from db import init_db, get_project_stats
 from analyzer import analyze_local_path_background, search_semantic, call_coding_model
 from config import CFG
 from projects import (
@@ -158,15 +158,13 @@ def api_query(request: QueryRequest):
         
         db_path = project["database_path"]
         
-        # Get the first analysis ID from the project database
-        analyses = list_analyses(db_path)
-        if not analyses:
+        # Check if project has been indexed
+        stats = get_project_stats(db_path)
+        if stats["file_count"] == 0:
             return JSONResponse({"error": "Project not indexed yet"}, status_code=400)
         
-        analysis_id = analyses[0]["id"]
-        
         # Perform semantic search
-        results = search_semantic(request.query, db_path, analysis_id=analysis_id, top_k=request.top_k)
+        results = search_semantic(request.query, db_path, top_k=request.top_k)
         
         return JSONResponse({
             "results": results,
@@ -298,12 +296,10 @@ def code_endpoint(request: Request):
         
         database_path = project["database_path"]
         
-        # Get the first analysis from this project's database
-        analyses = list_analyses(database_path)
-        if not analyses:
+        # Check if project has been indexed
+        stats = get_project_stats(database_path)
+        if stats["file_count"] == 0:
             return JSONResponse({"error": "Project not indexed yet. Please run indexing first."}, status_code=400)
-        
-        analysis_id = analyses[0]["id"]
     except Exception as e:
         logger.exception(f"Error getting project: {e}")
         return JSONResponse({"error": "Failed to retrieve project"}, status_code=500)
@@ -319,7 +315,7 @@ def code_endpoint(request: Request):
     # If RAG requested, perform semantic search and build context
     if use_rag:
         try:
-            retrieved = search_semantic(prompt, database_path, analysis_id=int(analysis_id), top_k=top_k)
+            retrieved = search_semantic(prompt, database_path, top_k=top_k)
             # Build context WITHOUT including snippets: only include file references and scores
             context_parts = []
             total_len = len(combined_context)

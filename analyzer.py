@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any, List
 import concurrent.futures
 import threading
 
-from db import create_analysis, store_file, update_analysis_status
+from db import store_file
 from external_api import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
 from logger import get_logger
@@ -268,7 +268,6 @@ def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optio
 def _process_file_sync(
     semaphore: threading.Semaphore,
     database_path: str,
-    analysis_id: int,
     full_path: str,
     rel_path: str,
     cfg: Optional[Dict[str, Any]],
@@ -295,9 +294,9 @@ def _process_file_sync(
 
         # store file (synchronous DB writer)
         try:
-            fid = store_file(database_path, analysis_id, rel_path, content, lang)
+            fid = store_file(database_path, rel_path, content, lang)
         except Exception:
-            logger.exception("Failed to store file %s for analysis %s", rel_path, analysis_id)
+            logger.exception("Failed to store file %s", rel_path)
             return {"stored": False, "embedded": False}
 
         _ = Document(text=content, extra_info={"path": rel_path, "lang": lang})
@@ -396,14 +395,10 @@ def analyze_local_path_sync(
 ):
     """
     Synchronous implementation of the analysis pipeline.
-    Submits per-file tasks to a shared ThreadPoolExecutor and updates DB counts/status synchronously.
+    Submits per-file tasks to a shared ThreadPoolExecutor.
     """
-    aid = None
     semaphore = threading.Semaphore(EMBEDDING_CONCURRENCY)
     try:
-        name = os.path.basename(os.path.abspath(local_path)) or local_path
-        aid = create_analysis(database_path, name, local_path, "running")
-
         file_count = 0
         emb_count = 0
         file_paths: List[Dict[str, str]] = []
@@ -431,7 +426,6 @@ def analyze_local_path_sync(
                     _process_file_sync,
                     semaphore,
                     database_path,
-                    aid,
                     f["full"],
                     f["rel"],
                     cfg,
@@ -447,7 +441,7 @@ def analyze_local_path_sync(
                         if r.get("embedded"):
                             emb_count += 1
                 except Exception:
-                    logger.exception("A per-file task failed for analysis %s", aid)
+                    logger.exception("A per-file task failed")
 
         # store uv_detected.json metadata if possible
         uv_info = None
@@ -459,7 +453,6 @@ def analyze_local_path_sync(
         try:
             store_file(
                 database_path,
-                aid,
                 "uv_detected.json",
                 json.dumps(uv_info, indent=2),
                 "meta",
@@ -468,34 +461,9 @@ def analyze_local_path_sync(
             try:
                 print("Failed to store uv_detected.json in DB")
             except Exception:
-                logger.exception("Failed to write uv_detected meta error to disk for analysis %s", aid)
-
-        # final counts & status
-        try:
-            # update_analysis_counts may be defined elsewhere; call if present
-            try:
-                update_analysis_counts  # type: ignore
-                update_analysis_counts(database_path, aid, file_count, emb_count)  # type: ignore
-            except NameError:
-                # function not present; skip
-                pass
-        except Exception:
-            logger.exception("Failed to update analysis counts for %s", aid)
-
-        try:
-            update_analysis_status(database_path, aid, "completed")
-        except Exception:
-            logger.exception("Failed to set analysis status to completed for %s", aid)
+                logger.exception("Failed to write uv_detected meta error")
 
     except Exception:
-        try:
-            if aid:
-                try:
-                    update_analysis_status(database_path, aid, "failed")
-                except Exception:
-                    pass
-        except Exception:
-            pass
         traceback.print_exc()
 
 
@@ -534,7 +502,7 @@ def cosine(a, b):
     return sum(x * y for x, y in zip(a, b)) / (na * nb)
 
 
-def search_semantic(query: str, database_path: str, analysis_id: int, top_k: int = 5):
+def search_semantic(query: str, database_path: str, top_k: int = 5):
     """
     Uses sqlite-vector's vector_full_scan to retrieve best-matching chunks and returns
     a list of {file_id, path, chunk_index, score}.
