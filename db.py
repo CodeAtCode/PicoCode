@@ -173,27 +173,33 @@ def init_db(database_path: str) -> None:
     """
     Initialize database schema. Safe to call multiple times.
     Creates:
-    - files (stores full content of indexed files)
+    - files (stores full content of indexed files with metadata for incremental indexing)
     - chunks (with embedding BLOB column for sqlite-vector)
+    - project_metadata (project-level tracking)
     """
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
         
         # files table (stores full content, used to reconstruct chunks)
+        # Added last_modified and file_hash for incremental indexing
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                path TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
                 content TEXT,
                 language TEXT,
                 snippet TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
+                last_modified REAL,
+                file_hash TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
             )
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_hash ON files(file_hash);")
 
         # chunks table: metadata for chunked documents; includes embedding BLOB column
         cur.execute(
@@ -210,20 +216,43 @@ def init_db(database_path: str) -> None:
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);")
+        
+        # project_metadata table for project-level tracking
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        
         conn.commit()
     finally:
         conn.close()
 
 
-def store_file(database_path, path, content, language):
+def store_file(database_path, path, content, language, last_modified=None, file_hash=None):
     """
-    Insert a file record into the DB using a queued single-writer to avoid
+    Insert or update a file record into the DB using a queued single-writer to avoid
     sqlite 'database is locked' errors in multithreaded scenarios.
+    Supports incremental indexing with last_modified and file_hash tracking.
     Returns lastrowid (same as the previous store_file implementation).
     """
     snippet = (content[:512] if content else "")
-    sql = "INSERT INTO files (path, content, language, snippet) VALUES (?, ?, ?, ?)"
-    params = (path, content, language, snippet)
+    sql = """
+        INSERT INTO files (path, content, language, snippet, last_modified, file_hash, updated_at) 
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(path) DO UPDATE SET 
+            content=excluded.content,
+            language=excluded.language,
+            snippet=excluded.snippet,
+            last_modified=excluded.last_modified,
+            file_hash=excluded.file_hash,
+            updated_at=datetime('now')
+    """
+    params = (path, content, language, snippet, last_modified, file_hash)
 
     writer = _get_writer(database_path)
     # We wait for the background writer to complete the insert and then return the row id.
@@ -310,6 +339,106 @@ def clear_project_data(database_path: str) -> None:
         # Delete files
         cur.execute("DELETE FROM files")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_file_by_path(database_path: str, path: str) -> Optional[Dict[str, Any]]:
+    """
+    Get file metadata by path for incremental indexing checks.
+    Returns None if file doesn't exist.
+    """
+    conn = _get_connection(database_path)
+    try:
+        row = conn.execute(
+            "SELECT id, path, last_modified, file_hash FROM files WHERE path = ?",
+            (path,)
+        ).fetchone()
+        if row:
+            return {
+                "id": row["id"],
+                "path": row["path"],
+                "last_modified": row["last_modified"],
+                "file_hash": row["file_hash"]
+            }
+        return None
+    finally:
+        conn.close()
+
+
+def needs_reindex(database_path: str, path: str, current_mtime: float, current_hash: str) -> bool:
+    """
+    Check if a file needs to be re-indexed based on modification time and hash.
+    Returns True if file is new or has changed.
+    """
+    existing = get_file_by_path(database_path, path)
+    if not existing:
+        return True
+    
+    # Check if modification time or hash changed
+    if existing["last_modified"] is None or existing["file_hash"] is None:
+        return True
+    
+    if existing["last_modified"] != current_mtime or existing["file_hash"] != current_hash:
+        return True
+    
+    return False
+
+
+def set_project_metadata(database_path: str, key: str, value: str) -> None:
+    """
+    Set a project metadata key-value pair.
+    """
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO project_metadata (key, value, updated_at) 
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET 
+                value=excluded.value,
+                updated_at=datetime('now')
+            """,
+            (key, value)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_project_metadata(database_path: str, key: str) -> Optional[str]:
+    """
+    Get a project metadata value by key.
+    """
+    conn = _get_connection(database_path)
+    try:
+        row = conn.execute(
+            "SELECT value FROM project_metadata WHERE key = ?",
+            (key,)
+        ).fetchone()
+        return row["value"] if row else None
+    finally:
+        conn.close()
+
+
+def delete_file_by_path(database_path: str, path: str) -> None:
+    """
+    Delete a file and its chunks by path.
+    Used for incremental indexing when files are removed.
+    """
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        # Get file_id
+        row = cur.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
+        if row:
+            file_id = row["id"]
+            # Delete chunks first
+            cur.execute("DELETE FROM chunks WHERE file_id = ?", (file_id,))
+            # Delete file
+            cur.execute("DELETE FROM files WHERE id = ?", (file_id,))
+            conn.commit()
     finally:
         conn.close()
 
