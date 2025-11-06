@@ -230,7 +230,13 @@ def api_health():
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     analyses = list_analyses(DATABASE)
-    return templates.TemplateResponse("index.html", {"request": request, "analyses": analyses, "config": CFG})
+    projects_list = list_projects()
+    return templates.TemplateResponse("index.html", {
+        "request": request, 
+        "analyses": analyses, 
+        "projects": projects_list,
+        "config": CFG
+    })
 
 
 @app.get("/analyses/status")

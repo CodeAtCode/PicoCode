@@ -4,3 +4,5 @@ codebase.*
 picocode.egg-info
 uv.lock
 __pycache__
+# Per-project databases
+.picocode/

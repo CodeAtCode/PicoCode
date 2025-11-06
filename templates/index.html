@@ -53,6 +53,44 @@
 
         <div class="card mt-3">
           <div class="card-body">
+            <h5 class="card-title">Projects (v0.2)</h5>
+            <p class="text-muted small">Per-project databases for isolation</p>
+            {% if projects %}
+              <ul class="list-group list-group-flush">
+                {% for p in projects %}
+                  <li class="list-group-item project-item" data-project-id="{{ p.id }}">
+                    <div class="d-flex justify-content-between align-items-start">
+                      <div>
+                        <div class="fw-bold">{{ p.name }}</div>
+                        <div class="small text-muted">{{ p.path }}</div>
+                        <div class="small mt-1">
+                          {% if p.status == 'indexing' %}
+                            <span class="badge bg-warning text-dark">indexing</span>
+                          {% elif p.status == 'ready' %}
+                            <span class="badge bg-success">ready</span>
+                          {% elif p.status == 'error' %}
+                            <span class="badge bg-danger">error</span>
+                          {% else %}
+                            <span class="badge bg-secondary">{{ p.status }}</span>
+                          {% endif %}
+                          {% if p.last_indexed_at %}
+                            <span class="text-muted ms-2">Last indexed: {{ p.last_indexed_at }}</span>
+                          {% endif %}
+                        </div>
+                      </div>
+                      <button class="btn btn-sm btn-outline-primary" onclick="useProject('{{ p.id }}')">Use</button>
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="mb-0 text-muted">No projects yet. Use API to create.</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="card mt-3">
+          <div class="card-body">
             <h5 class="card-title">Analyses</h5>
             {% if analyses %}
               <ul class="list-group list-group-flush">
@@ -509,6 +547,12 @@
         win.appendChild(err);
         win.scrollTop = win.scrollHeight;
       }
+    }
+
+    // Project management functions
+    function useProject(projectId) {
+      // For now, just show a message
+      alert("Project selected: " + projectId + "\n\nUse the API endpoints to interact with this project:\n- POST /api/projects/index with project_id\n- POST /api/query with project_id and query\n- POST /api/code with project_id and prompt");
     }
 
     // Wire up event handlers after DOM loaded
