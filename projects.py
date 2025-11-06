@@ -224,15 +224,19 @@ def get_project(project_path: str) -> Optional[Dict[str, Any]]:
     project_path = os.path.abspath(project_path)
     
     registry_path = _get_projects_registry_path()
-    conn = sqlite3.connect(registry_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM projects WHERE path = ?", (project_path,))
-        row = cur.fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
+    
+    def _get():
+        conn = sqlite3.connect(registry_path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM projects WHERE path = ?", (project_path,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+    
+    return _retry_on_db_locked(_get)
 
 
 def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
@@ -248,15 +252,19 @@ def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
     _init_registry_db()
     
     registry_path = _get_projects_registry_path()
-    conn = sqlite3.connect(registry_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
-        row = cur.fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
+    
+    def _get():
+        conn = sqlite3.connect(registry_path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+    
+    return _retry_on_db_locked(_get)
 
 
 def list_projects() -> List[Dict[str, Any]]:
@@ -269,15 +277,19 @@ def list_projects() -> List[Dict[str, Any]]:
     _init_registry_db()
     
     registry_path = _get_projects_registry_path()
-    conn = sqlite3.connect(registry_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM projects ORDER BY created_at DESC")
-        rows = cur.fetchall()
-        return [dict(row) for row in rows]
-    finally:
-        conn.close()
+    
+    def _list():
+        conn = sqlite3.connect(registry_path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM projects ORDER BY created_at DESC")
+            rows = cur.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+    
+    return _retry_on_db_locked(_list)
 
 
 def update_project_status(project_id: str, status: str, last_indexed_at: Optional[str] = None):
@@ -292,22 +304,26 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
     _init_registry_db()
     
     registry_path = _get_projects_registry_path()
-    conn = sqlite3.connect(registry_path)
-    try:
-        cur = conn.cursor()
-        if last_indexed_at:
-            cur.execute(
-                "UPDATE projects SET status = ?, last_indexed_at = ? WHERE id = ?",
-                (status, last_indexed_at, project_id)
-            )
-        else:
-            cur.execute(
-                "UPDATE projects SET status = ? WHERE id = ?",
-                (status, project_id)
-            )
-        conn.commit()
-    finally:
-        conn.close()
+    
+    def _update():
+        conn = sqlite3.connect(registry_path, timeout=10.0)
+        try:
+            cur = conn.cursor()
+            if last_indexed_at:
+                cur.execute(
+                    "UPDATE projects SET status = ?, last_indexed_at = ? WHERE id = ?",
+                    (status, last_indexed_at, project_id)
+                )
+            else:
+                cur.execute(
+                    "UPDATE projects SET status = ? WHERE id = ?",
+                    (status, project_id)
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    
+    _retry_on_db_locked(_update)
 
 
 def update_project_settings(project_id: str, settings: Dict[str, Any]):
@@ -321,16 +337,20 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
     _init_registry_db()
     
     registry_path = _get_projects_registry_path()
-    conn = sqlite3.connect(registry_path)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE projects SET settings = ? WHERE id = ?",
-            (json.dumps(settings), project_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    
+    def _update():
+        conn = sqlite3.connect(registry_path, timeout=10.0)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE projects SET settings = ? WHERE id = ?",
+                (json.dumps(settings), project_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    
+    _retry_on_db_locked(_update)
 
 
 def delete_project(project_id: str):
@@ -357,13 +377,17 @@ def delete_project(project_id: str):
     
     # Remove from registry
     registry_path = _get_projects_registry_path()
-    conn = sqlite3.connect(registry_path)
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    
+    def _delete():
+        conn = sqlite3.connect(registry_path, timeout=10.0)
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+            conn.commit()
+        finally:
+            conn.close()
+    
+    _retry_on_db_locked(_delete)
 
 
 def get_or_create_project(project_path: str, name: Optional[str] = None) -> Dict[str, Any]:
