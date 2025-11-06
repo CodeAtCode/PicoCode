@@ -1,0 +1,21 @@
+<idea-plugin>
+    <id>com.picocode.rag-assistant</id>
+    <name>PicoCode RAG Assistant</name>
+    <version>0.2.0</version>
+    <vendor>PicoCode</vendor>
+
+    <description><![CDATA[
+        Local RAG-powered code assistant with per-project persistent storage.
+        Uses your OpenAI-compatible provider for embeddings and code generation.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="PicoCode RAG"
+                    secondary="true"
+                    icon="/icons/picocode.png"
+                    anchor="right"
+                    factoryClass="com.picocode.PicoCodeToolWindowFactory"/>
+    </extensions>
+</idea-plugin>

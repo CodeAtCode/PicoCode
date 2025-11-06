@@ -9,11 +9,26 @@ This tool is a way to achieve this!
 
 ## Overview
 
-- Indexes files, computes embeddings using an OpenAI-compatible embedding endpoint, stores data in SQLite (with SQlite-vector).
-- Reads dependencies by running `python -m pip list --format=json` inside a virtualenv when available.
-- Detects Astral "uv" usage (https://docs.astral.sh/uv/) by inspecting `pyproject.toml` and/or installed packages in a venv; if uv is detected it tries to locate a venv managed by uv and uses it for `pip list`.
-- Analysis runs asynchronously (FastAPI BackgroundTasks) so the UI remains responsive.
-- Minimal web UI for starting analysis and asking questions (semantic search + coding model).
+- **Production-ready RAG backend** with per-project persistent storage
+- **PyCharm/IDE integration** via REST API (see [PYCHARM_INTEGRATION.md](PYCHARM_INTEGRATION.md))
+- **Per-project databases**: Each project gets isolated SQLite database
+- Indexes files, computes embeddings using an OpenAI-compatible embedding endpoint
+- Stores vector embeddings in SQLite using sqlite-vector for fast semantic search
+- Analysis runs asynchronously (FastAPI BackgroundTasks) so the UI remains responsive
+- Minimal web UI for starting analysis and asking questions (semantic search + coding model)
+- Health check and monitoring endpoints for production deployment
+
+### PyCharm Plugin
+
+A full-featured PyCharm/IntelliJ IDEA plugin is available in the `plugin/` directory:
+
+- **Per-Project Indexing**: Automatically indexes current project
+- **Secure API Keys**: Stores credentials in IDE password safe
+- **Real-time Responses**: Streams answers from your coding model
+- **File Navigation**: Click retrieved files to open in editor
+- **Progress Indicators**: Visual feedback during indexing
+
+See [plugin/README.md](plugin/README.md) for installation and usage instructions.
 
 Prerequisites
 - Python 3.8+ (3.11+ recommended for builtin tomllib)
