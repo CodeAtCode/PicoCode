@@ -451,7 +451,8 @@ def analyze_local_path_sync(
             uv_info = None
 
         try:
-            store_file(
+            # Metadata storage is non-critical, ignore return value
+            _ = store_file(
                 database_path,
                 "uv_detected.json",
                 json.dumps(uv_info, indent=2),
