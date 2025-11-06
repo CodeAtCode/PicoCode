@@ -84,19 +84,3 @@ To modify the plugin:
 3. Run `./gradlew runIde` to test in a sandbox IDE
 4. Build with `./gradlew buildPlugin`
 
-## Troubleshooting
-
-**Server won't start**
-- Check Python is in PATH
-- Verify PicoCode dependencies are installed
-- Check console for error messages
-
-**Indexing fails**
-- Ensure project path is accessible
-- Check API key is configured correctly
-- Verify API base URL is reachable
-
-**No query results**
-- Index the project first
-- Check server is running
-- Verify embeddings model is correct

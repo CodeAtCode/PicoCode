@@ -19,10 +19,3 @@ class QueryRequest(BaseModel):
     query: str
     top_k: Optional[int] = 5
 
-
-class CodeCompletionRequest(BaseModel):
-    project_id: str
-    prompt: str
-    context: Optional[str] = ""
-    use_rag: Optional[bool] = True
-    top_k: Optional[int] = 5

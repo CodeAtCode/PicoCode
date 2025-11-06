@@ -18,7 +18,7 @@ from projects import (
 )
 from models import (
     CreateProjectRequest, IndexProjectRequest, 
-    QueryRequest, CodeCompletionRequest
+    QueryRequest
 )
 
 DATABASE = CFG.get("database_path", "codebase.db")
@@ -179,62 +179,6 @@ def api_query(request: QueryRequest):
         logger.exception(f"Error querying project: {e}")
         return JSONResponse({"error": "Query failed"}, status_code=500)
 
-
-@app.post("/api/code")
-def api_code_completion(request: CodeCompletionRequest):
-    """Get code suggestions using RAG + LLM (PyCharm-compatible)."""
-    import logging
-    logger = logging.getLogger(__name__)
-    try:
-        project = get_project_by_id(request.project_id)
-        if not project:
-            return JSONResponse({"error": "Project not found"}, status_code=404)
-        
-        db_path = project["database_path"]
-        
-        # Get context from RAG if enabled
-        combined_context = request.context or ""
-        used_context = []
-        
-        if request.use_rag:
-            analyses = list_analyses(db_path)
-            if analyses:
-                analysis_id = analyses[0]["id"]
-                try:
-                    retrieved = search_semantic(request.prompt, db_path, analysis_id=analysis_id, top_k=request.top_k)
-                    context_parts = []
-                    total_len = len(combined_context)
-                    for r in retrieved:
-                        part = f"File: {r.get('path')} (score: {r.get('score', 0):.4f})\n"
-                        if total_len + len(part) > TOTAL_CONTEXT_LIMIT:
-                            break
-                        context_parts.append(part)
-                        total_len += len(part)
-                        used_context.append({"path": r.get("path"), "score": r.get("score")})
-                    if context_parts:
-                        retrieved_text = "\n".join(context_parts)
-                        if combined_context:
-                            combined_context = combined_context + "\n\nRetrieved:\n" + retrieved_text
-                        else:
-                            combined_context = "Retrieved:\n" + retrieved_text
-                except Exception:
-                    pass
-        
-        # Call coding model
-        try:
-            response = call_coding_model(request.prompt, combined_context)
-        except Exception as e:
-            logger.error(f"Coding model call failed: {e}")
-            return JSONResponse({"error": "Code generation failed"}, status_code=500)
-        
-        return JSONResponse({
-            "response": response,
-            "used_context": used_context,
-            "project_id": request.project_id
-        })
-    except Exception as e:
-        logger.exception(f"Error in code completion: {e}")
-        return JSONResponse({"error": "Code completion failed"}, status_code=500)
 
 
 @app.get("/api/health")
