@@ -9,11 +9,11 @@ import uvicorn
 from typing import Optional
 from datetime import datetime
 
-from db import init_db, list_analyses, delete_analysis
+from db import init_db, list_analyses
 from analyzer import analyze_local_path_background, search_semantic, call_coding_model
 from config import CFG
 from projects import (
-    create_project, get_project, get_project_by_id, list_projects,
+    get_project_by_id, list_projects,
     update_project_status, delete_project, get_or_create_project
 )
 from models import (
@@ -24,16 +24,23 @@ from logger import get_logger
 
 logger = get_logger(__name__)
 
-DATABASE = CFG.get("database_path", "codebase.db")
 MAX_FILE_SIZE = int(CFG.get("max_file_size", 200000))
 
 # Controls how many characters of each snippet and total context we send to coding model
 TOTAL_CONTEXT_LIMIT = 4000
-_ANALYSES_CACHE = []
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db(DATABASE)
+    # Project registry is auto-initialized when needed via create_project
+    
+    # Auto-create default project from configured local_path if it exists
+    local_path = CFG.get("local_path")
+    if local_path and os.path.exists(local_path):
+        try:
+            get_or_create_project(local_path, "Default Project")
+        except Exception as e:
+            logger.warning(f"Could not create default project: {e}")
+    
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -184,58 +191,79 @@ def api_health():
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    analyses = list_analyses(DATABASE)
     projects_list = list_projects()
     return templates.TemplateResponse("index.html", {
         "request": request, 
-        "analyses": analyses, 
         "projects": projects_list,
         "config": CFG
     })
 
 
-@app.get("/analyses/status")
-def analyses_status():
-    global _ANALYSES_CACHE
+@app.get("/projects/status")
+def projects_status():
+    """Get list of all projects."""
     try:
-        analyses = list_analyses(DATABASE)
-        # If the DB returned a non-empty list, update cache and return it.
-        if analyses:
-            _ANALYSES_CACHE = analyses
-            return JSONResponse(analyses)
-        # If DB returned empty but we have a cached non-empty list, return cache
-        if not analyses and _ANALYSES_CACHE:
-            return JSONResponse(_ANALYSES_CACHE)
-        # else return whatever (empty list) — first-run or truly empty
-        return JSONResponse(analyses)
+        projects = list_projects()
+        return JSONResponse(projects)
     except Exception as e:
-        # On DB errors (e.g., locked) return last known cache to avoid empty responses spam.
-        if _ANALYSES_CACHE:
-            return JSONResponse(_ANALYSES_CACHE)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.exception(f"Error getting projects status: {e}")
+        return JSONResponse({"error": "Failed to retrieve projects"}, status_code=500)
 
 
-@app.get("/analyses/{analysis_id}/delete")
-def delete_analysis_endpoint(analysis_id: int):
+@app.delete("/projects/{project_id}")
+def delete_project_endpoint(project_id: str):
+    """Delete a project and its database."""
     try:
-        delete_analysis(DATABASE, analysis_id)
+        delete_project(project_id)
         return JSONResponse({"deleted": True})
+    except ValueError as e:
+        logger.warning(f"Project not found for deletion: {e}")
+        return JSONResponse({"deleted": False, "error": "Project not found"}, status_code=404)
     except Exception as e:
-        return JSONResponse({"deleted": False, "error": str(e)}, status_code=500)
+        logger.exception(f"Error deleting project: {e}")
+        return JSONResponse({"deleted": False, "error": "Failed to delete project"}, status_code=500)
 
 
-@app.post("/analyze")
-def analyze(background_tasks: BackgroundTasks):
-    local_path = CFG.get("local_path")
-    if not local_path or not os.path.exists(local_path):
-        raise HTTPException(status_code=400, detail="Configured LOCAL_PATH does not exist")
-    venv_path = CFG.get("venv_path")
-    background_tasks.add_task(analyze_local_path_background, local_path, DATABASE, venv_path, MAX_FILE_SIZE, CFG)
-    return RedirectResponse(url="/", status_code=303)
+@app.post("/index")
+def index_project(background_tasks: BackgroundTasks, project_path: str = None):
+    """Index/re-index the default project or specified path."""
+    try:
+        # Use configured path or provided path
+        path_to_index = project_path or CFG.get("local_path")
+        if not path_to_index or not os.path.exists(path_to_index):
+            raise HTTPException(status_code=400, detail="Project path does not exist")
+        
+        # Get or create project
+        project = get_or_create_project(path_to_index)
+        project_id = project["id"]
+        db_path = project["database_path"]
+        
+        # Update status to indexing
+        update_project_status(project_id, "indexing")
+        
+        # Start background indexing
+        venv_path = CFG.get("venv_path")
+        
+        def index_callback():
+            try:
+                analyze_local_path_background(path_to_index, db_path, venv_path, MAX_FILE_SIZE, CFG)
+                update_project_status(project_id, "ready", datetime.utcnow().isoformat())
+            except Exception as e:
+                logger.exception(f"Indexing failed: {e}")
+                update_project_status(project_id, "error")
+                raise
+        
+        background_tasks.add_task(index_callback)
+        
+        return RedirectResponse(url="/", status_code=303)
+    except Exception as e:
+        logger.exception(f"Error starting indexing: {e}")
+        raise HTTPException(status_code=500, detail="Failed to start indexing")
 
 
 @app.post("/code")
 def code_endpoint(request: Request):
+    """Code completion endpoint - uses project_id to find the right database."""
     payload = None
     try:
         payload = request.json()
@@ -252,29 +280,33 @@ def code_endpoint(request: Request):
     explicit_context = payload.get("context", "") or ""
     use_rag = bool(payload.get("use_rag", True))
     
-    # Support both analysis_id (old) and project_id (new for plugin)
-    analysis_id = payload.get("analysis_id")
+    # Get project_id - if not provided, use the first available project
     project_id = payload.get("project_id")
     
-    # If project_id is provided, get the database path and find the first analysis
-    database_path = DATABASE  # default to main database
-    if project_id and not analysis_id:
-        try:
-            project = get_project_by_id(project_id)
-            if not project:
-                return JSONResponse({"error": "Project not found"}, status_code=404)
-            
-            database_path = project["database_path"]
-            
-            # Get the first analysis from this project
-            analyses = list_analyses(database_path)
-            if not analyses:
-                return JSONResponse({"error": "Project not indexed yet"}, status_code=400)
-            
-            analysis_id = analyses[0]["id"]
-        except Exception as e:
-            logger.exception(f"Error getting project analysis: {e}")
-            return JSONResponse({"error": "Failed to get project analysis"}, status_code=500)
+    if not project_id:
+        # Try to get default project or first available
+        projects = list_projects()
+        if not projects:
+            return JSONResponse({"error": "No projects available. Please index a project first."}, status_code=400)
+        project_id = projects[0]["id"]
+    
+    # Get project and its database
+    try:
+        project = get_project_by_id(project_id)
+        if not project:
+            return JSONResponse({"error": "Project not found"}, status_code=404)
+        
+        database_path = project["database_path"]
+        
+        # Get the first analysis from this project's database
+        analyses = list_analyses(database_path)
+        if not analyses:
+            return JSONResponse({"error": "Project not indexed yet. Please run indexing first."}, status_code=400)
+        
+        analysis_id = analyses[0]["id"]
+    except Exception as e:
+        logger.exception(f"Error getting project: {e}")
+        return JSONResponse({"error": "Failed to retrieve project"}, status_code=500)
     
     try:
         top_k = int(payload.get("top_k", 5))
@@ -284,8 +316,8 @@ def code_endpoint(request: Request):
     used_context = []
     combined_context = explicit_context or ""
 
-    # If RAG requested and an analysis_id provided, perform semantic search and build context
-    if use_rag and analysis_id:
+    # If RAG requested, perform semantic search and build context
+    if use_rag:
         try:
             retrieved = search_semantic(prompt, database_path, analysis_id=int(analysis_id), top_k=top_k)
             # Build context WITHOUT including snippets: only include file references and scores
