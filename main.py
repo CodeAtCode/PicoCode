@@ -21,6 +21,7 @@ from models import (
     QueryRequest
 )
 from logger import get_logger
+from rate_limiter import query_limiter, indexing_limiter, general_limiter
 
 logger = get_logger(__name__)
 
@@ -28,6 +29,14 @@ MAX_FILE_SIZE = int(CFG.get("max_file_size", 200000))
 
 # Controls how many characters of each snippet and total context we send to coding model
 TOTAL_CONTEXT_LIMIT = 4000
+
+
+def _get_client_ip(request: Request) -> str:
+    """Get client IP address from request."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -113,8 +122,18 @@ def api_delete_project(project_id: str):
 
 
 @app.post("/api/projects/index")
-def api_index_project(request: IndexProjectRequest, background_tasks: BackgroundTasks):
+def api_index_project(http_request: Request, request: IndexProjectRequest, background_tasks: BackgroundTasks):
     """Index/re-index a project in the background."""
+    # Rate limiting for indexing operations (more strict)
+    client_ip = _get_client_ip(http_request)
+    allowed, retry_after = indexing_limiter.is_allowed(client_ip)
+    if not allowed:
+        return JSONResponse(
+            {"error": "Rate limit exceeded for indexing", "retry_after": retry_after},
+            status_code=429,
+            headers={"Retry-After": str(retry_after)}
+        )
+    
     try:
         project = get_project_by_id(request.project_id)
         if not project:
@@ -149,8 +168,18 @@ def api_index_project(request: IndexProjectRequest, background_tasks: Background
 
 
 @app.post("/api/query")
-def api_query(request: QueryRequest):
+def api_query(http_request: Request, request: QueryRequest):
     """Query a project using semantic search (PyCharm-compatible)."""
+    # Rate limiting
+    client_ip = _get_client_ip(http_request)
+    allowed, retry_after = query_limiter.is_allowed(client_ip)
+    if not allowed:
+        return JSONResponse(
+            {"error": "Rate limit exceeded", "retry_after": retry_after},
+            status_code=429,
+            headers={"Retry-After": str(retry_after)}
+        )
+    
     try:
         project = get_project_by_id(request.project_id)
         if not project:
