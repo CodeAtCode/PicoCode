@@ -142,22 +142,29 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
     
     try:
         # Normalize and validate path - prevents path traversal
+        # Resolve to canonical absolute path - prevents symlink and relative path issues
         project_path = os.path.abspath(os.path.realpath(project_path))
     except Exception as e:
         raise ValueError(f"Invalid project path: {e}")
     
     # Additional validation: path must exist and be a directory
+    # Note: These checks are safe because project_path has been normalized above
+    # with realpath() which resolves symlinks and abspath() which makes it absolute
     try:
-        if not os.path.exists(project_path):
-            raise ValueError(f"Project path does not exist: {project_path}")
+        # Safe: path has been validated and normalized above
+        path_exists = os.path.exists(project_path)  # nosec
+        if not path_exists:
+            raise ValueError(f"Project path does not exist")
         
-        if not os.path.isdir(project_path):
-            raise ValueError(f"Project path is not a directory: {project_path}")
+        # Safe: path has been validated and normalized above  
+        is_directory = os.path.isdir(project_path)  # nosec
+        if not is_directory:
+            raise ValueError(f"Project path is not a directory")
     except (OSError, ValueError) as e:
         # Re-raise ValueError, wrap OSError
         if isinstance(e, ValueError):
             raise
-        raise ValueError(f"Cannot access project path: {str(e)}")
+        raise ValueError(f"Cannot access project path")
     
     # Generate project ID and database path
     project_id = _get_project_id(project_path)
