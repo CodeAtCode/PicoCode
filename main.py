@@ -7,10 +7,16 @@ import os
 import json
 import uvicorn
 from typing import Optional
+from datetime import datetime
+from pydantic import BaseModel
 
 from db import init_db, list_analyses, delete_analysis
 from analyzer import analyze_local_path_background, search_semantic, call_coding_model
 from config import CFG  # loads .env
+from projects import (
+    create_project, get_project, get_project_by_id, list_projects,
+    update_project_status, delete_project, get_or_create_project
+)
 
 DATABASE = CFG.get("database_path", "codebase.db")
 MAX_FILE_SIZE = int(CFG.get("max_file_size", 200000))
@@ -28,6 +34,197 @@ app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# Pydantic models for request/response
+class CreateProjectRequest(BaseModel):
+    path: str
+    name: Optional[str] = None
+
+class IndexProjectRequest(BaseModel):
+    project_id: str
+
+class QueryRequest(BaseModel):
+    project_id: str
+    query: str
+    top_k: Optional[int] = 5
+
+class CodeCompletionRequest(BaseModel):
+    project_id: str
+    prompt: str
+    context: Optional[str] = ""
+    use_rag: Optional[bool] = True
+    top_k: Optional[int] = 5
+
+
+# Project Management API (PyCharm-compatible)
+@app.post("/api/projects")
+def api_create_project(request: CreateProjectRequest):
+    """Create or get a project with per-project database."""
+    try:
+        project = get_or_create_project(request.path, request.name)
+        return JSONResponse(project)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.get("/api/projects")
+def api_list_projects():
+    """List all projects."""
+    try:
+        projects = list_projects()
+        return JSONResponse(projects)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/projects/{project_id}")
+def api_get_project(project_id: str):
+    """Get project details by ID."""
+    try:
+        project = get_project_by_id(project_id)
+        if not project:
+            return JSONResponse({"error": "Project not found"}, status_code=404)
+        return JSONResponse(project)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/api/projects/{project_id}")
+def api_delete_project(project_id: str):
+    """Delete a project and its database."""
+    try:
+        delete_project(project_id)
+        return JSONResponse({"success": True})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.post("/api/projects/index")
+def api_index_project(request: IndexProjectRequest, background_tasks: BackgroundTasks):
+    """Index/re-index a project in the background."""
+    try:
+        project = get_project_by_id(request.project_id)
+        if not project:
+            return JSONResponse({"error": "Project not found"}, status_code=404)
+        
+        project_path = project["path"]
+        db_path = project["database_path"]
+        
+        if not os.path.exists(project_path):
+            return JSONResponse({"error": "Project path does not exist"}, status_code=400)
+        
+        # Update status to indexing
+        update_project_status(request.project_id, "indexing")
+        
+        # Start background indexing
+        venv_path = CFG.get("venv_path")
+        
+        def index_callback():
+            try:
+                analyze_local_path_background(project_path, db_path, venv_path, MAX_FILE_SIZE, CFG)
+                update_project_status(request.project_id, "ready", datetime.utcnow().isoformat())
+            except Exception as e:
+                update_project_status(request.project_id, "error")
+                raise
+        
+        background_tasks.add_task(index_callback)
+        
+        return JSONResponse({"status": "indexing", "project_id": request.project_id})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/query")
+def api_query(request: QueryRequest):
+    """Query a project using semantic search (PyCharm-compatible)."""
+    try:
+        project = get_project_by_id(request.project_id)
+        if not project:
+            return JSONResponse({"error": "Project not found"}, status_code=404)
+        
+        db_path = project["database_path"]
+        
+        # Get the first analysis ID from the project database
+        analyses = list_analyses(db_path)
+        if not analyses:
+            return JSONResponse({"error": "Project not indexed yet"}, status_code=400)
+        
+        analysis_id = analyses[0]["id"]
+        
+        # Perform semantic search
+        results = search_semantic(request.query, db_path, analysis_id=analysis_id, top_k=request.top_k)
+        
+        return JSONResponse({
+            "results": results,
+            "project_id": request.project_id,
+            "query": request.query
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/code")
+def api_code_completion(request: CodeCompletionRequest):
+    """Get code suggestions using RAG + LLM (PyCharm-compatible)."""
+    try:
+        project = get_project_by_id(request.project_id)
+        if not project:
+            return JSONResponse({"error": "Project not found"}, status_code=404)
+        
+        db_path = project["database_path"]
+        
+        # Get context from RAG if enabled
+        combined_context = request.context or ""
+        used_context = []
+        
+        if request.use_rag:
+            analyses = list_analyses(db_path)
+            if analyses:
+                analysis_id = analyses[0]["id"]
+                try:
+                    retrieved = search_semantic(request.prompt, db_path, analysis_id=analysis_id, top_k=request.top_k)
+                    context_parts = []
+                    total_len = len(combined_context)
+                    for r in retrieved:
+                        part = f"File: {r.get('path')} (score: {r.get('score', 0):.4f})\n"
+                        if total_len + len(part) > TOTAL_CONTEXT_LIMIT:
+                            break
+                        context_parts.append(part)
+                        total_len += len(part)
+                        used_context.append({"path": r.get("path"), "score": r.get("score")})
+                    if context_parts:
+                        retrieved_text = "\n".join(context_parts)
+                        if combined_context:
+                            combined_context = combined_context + "\n\nRetrieved:\n" + retrieved_text
+                        else:
+                            combined_context = "Retrieved:\n" + retrieved_text
+                except Exception:
+                    pass
+        
+        # Call coding model
+        try:
+            response = call_coding_model(request.prompt, combined_context)
+        except Exception as e:
+            return JSONResponse({"error": f"Coding model failed: {e}"}, status_code=500)
+        
+        return JSONResponse({
+            "response": response,
+            "used_context": used_context,
+            "project_id": request.project_id
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/health")
+def api_health():
+    """Health check endpoint."""
+    return JSONResponse({
+        "status": "ok",
+        "version": "0.2.0",
+        "features": ["rag", "per-project-db", "pycharm-api"]
+    })
 
 
 @app.get("/", response_class=HTMLResponse)

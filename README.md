@@ -9,11 +9,29 @@ This tool is a way to achieve this!
 
 ## Overview
 
-- Indexes files, computes embeddings using an OpenAI-compatible embedding endpoint, stores data in SQLite (with SQlite-vector).
-- Reads dependencies by running `python -m pip list --format=json` inside a virtualenv when available.
-- Detects Astral "uv" usage (https://docs.astral.sh/uv/) by inspecting `pyproject.toml` and/or installed packages in a venv; if uv is detected it tries to locate a venv managed by uv and uses it for `pip list`.
-- Analysis runs asynchronously (FastAPI BackgroundTasks) so the UI remains responsive.
-- Minimal web UI for starting analysis and asking questions (semantic search + coding model).
+- **Production-ready RAG backend** with per-project persistent storage
+- **PyCharm/IDE integration** via REST API (see [PYCHARM_INTEGRATION.md](PYCHARM_INTEGRATION.md))
+- **Per-project databases**: Each project gets isolated SQLite database
+- Indexes files, computes embeddings using an OpenAI-compatible embedding endpoint
+- Stores vector embeddings in SQLite using sqlite-vector for fast semantic search
+- Analysis runs asynchronously (FastAPI BackgroundTasks) so the UI remains responsive
+- Minimal web UI for starting analysis and asking questions (semantic search + coding model)
+- Health check and monitoring endpoints for production deployment
+
+## New Features (v0.2.0)
+
+### Per-Project Persistent Storage
+- Each opened project gets its own SQLite database
+- Isolated storage prevents cross-project data leakage
+- Project registry tracks all indexed projects
+- Automatic project ID generation based on path
+
+### PyCharm Plugin API
+- RESTful API designed for IDE integration
+- Create/manage projects via API
+- Background indexing with status tracking
+- Semantic search and code completion endpoints
+- See [PYCHARM_INTEGRATION.md](PYCHARM_INTEGRATION.md) for full API documentation
 
 Prerequisites
 - Python 3.8+ (3.11+ recommended for builtin tomllib)
