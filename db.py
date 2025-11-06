@@ -4,12 +4,11 @@ from typing import Any, Dict, List, Optional
 
 from config import CFG  # config (keeps chunk_size etc if needed)
 import atexit
-import logging
 import threading
 import queue
+from logger import get_logger
 
-logging.basicConfig(level=logging.INFO)
-_LOG = logging.getLogger(__name__)
+_LOG = get_logger(__name__)
 
 # registry of DBWriter instances keyed by database path
 _WRITERS = {}

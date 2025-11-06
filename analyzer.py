@@ -4,7 +4,6 @@ import time
 import traceback
 import sqlite3
 import importlib.resources
-import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -14,6 +13,8 @@ import threading
 from db import create_analysis, store_file, update_analysis_status
 from external_api import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
+from logger import get_logger
+import logging
 
 # reduce noise from httpx used by external libs
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -54,9 +55,7 @@ STRICT_VECTOR_INTEGRATION = True
 DB_LOCK_RETRY_COUNT = 6
 DB_LOCK_RETRY_BASE_DELAY = 0.05  # seconds, exponential backoff multiplier
 
-# configure basic logging for visibility
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def detect_language(path: str):

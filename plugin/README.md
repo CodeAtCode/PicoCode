@@ -29,15 +29,9 @@ The plugin ZIP will be in `build/distributions/`.
 ## Usage
 
 1. Open the PicoCode RAG tool window (right sidebar)
-2. Configure your OpenAI-compatible API:
-   - API Base URL (e.g., `https://api.openai.com/v1`)
-   - API Key (stored securely in IDE password safe)
-   - Embedding Model (e.g., `text-embedding-3-small`)
-   - Coding Model (e.g., `gpt-4`)
-3. Click "Save API Key" to store it securely
-4. Click "Start Server" to launch the Python backend
-5. Click "Index Project" to index your current project
-6. Ask questions in the query box and click "Query"
+2. Click "Start Server" to launch the Python backend
+3. Click "Index Project" to index your current project
+4. Ask questions in the query box and click "Query"
 
 ## Requirements
 

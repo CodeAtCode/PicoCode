@@ -6,17 +6,15 @@ import os
 import json
 import sqlite3
 import hashlib
-import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 # Import shared database utilities to avoid code duplication
 from db import _get_connection
+from logger import get_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Default projects directory
 PROJECTS_DIR = os.path.expanduser("~/.picocode/projects")
