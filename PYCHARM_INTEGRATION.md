@@ -254,27 +254,6 @@ Error responses include a JSON object:
 }
 ```
 
-## Security Considerations
-
-1. **Local-only**: Server binds to 127.0.0.1 by default (localhost only)
-2. **File access**: Only indexed files are accessible
-3. **Path validation**: Project paths are validated and normalized
-4. **Database isolation**: Each project has separate database
-
-## Performance
-
-- **Concurrent indexing**: Uses thread pool for parallel file processing
-- **Connection pooling**: Efficient SQLite connection management
-- **Caching**: Analysis results cached to reduce database queries
-- **Vector search**: Uses sqlite-vector for fast similarity search
-
-## Limitations
-
-1. Maximum file size: 200KB by default (configurable)
-2. Text files only (binary files skipped)
-3. Requires OpenAI-compatible embedding API
-4. SQLite database per project (not suitable for extremely large projects)
-
 ## Example Integration (Python)
 
 ```python

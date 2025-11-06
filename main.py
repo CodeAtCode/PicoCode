@@ -11,7 +11,7 @@ from datetime import datetime
 
 from db import init_db, list_analyses, delete_analysis
 from analyzer import analyze_local_path_background, search_semantic, call_coding_model
-from config import CFG  # loads .env
+from config import CFG
 from projects import (
     create_project, get_project, get_project_by_id, list_projects,
     update_project_status, delete_project, get_or_create_project
@@ -20,6 +20,9 @@ from models import (
     CreateProjectRequest, IndexProjectRequest, 
     QueryRequest
 )
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 DATABASE = CFG.get("database_path", "codebase.db")
 MAX_FILE_SIZE = int(CFG.get("max_file_size", 200000))
@@ -43,8 +46,6 @@ if os.path.isdir("static"):
 @app.post("/api/projects")
 def api_create_project(request: CreateProjectRequest):
     """Create or get a project with per-project database."""
-    import logging
-    logger = logging.getLogger(__name__)
     
     try:
         # Validate input
@@ -69,8 +70,6 @@ def api_create_project(request: CreateProjectRequest):
 @app.get("/api/projects")
 def api_list_projects():
     """List all projects."""
-    import logging
-    logger = logging.getLogger(__name__)
     try:
         projects = list_projects()
         return JSONResponse(projects)
@@ -82,8 +81,6 @@ def api_list_projects():
 @app.get("/api/projects/{project_id}")
 def api_get_project(project_id: str):
     """Get project details by ID."""
-    import logging
-    logger = logging.getLogger(__name__)
     try:
         project = get_project_by_id(project_id)
         if not project:
@@ -97,8 +94,6 @@ def api_get_project(project_id: str):
 @app.delete("/api/projects/{project_id}")
 def api_delete_project(project_id: str):
     """Delete a project and its database."""
-    import logging
-    logger = logging.getLogger(__name__)
     try:
         delete_project(project_id)
         return JSONResponse({"success": True})
@@ -113,8 +108,6 @@ def api_delete_project(project_id: str):
 @app.post("/api/projects/index")
 def api_index_project(request: IndexProjectRequest, background_tasks: BackgroundTasks):
     """Index/re-index a project in the background."""
-    import logging
-    logger = logging.getLogger(__name__)
     try:
         project = get_project_by_id(request.project_id)
         if not project:
@@ -151,8 +144,6 @@ def api_index_project(request: IndexProjectRequest, background_tasks: Background
 @app.post("/api/query")
 def api_query(request: QueryRequest):
     """Query a project using semantic search (PyCharm-compatible)."""
-    import logging
-    logger = logging.getLogger(__name__)
     try:
         project = get_project_by_id(request.project_id)
         if not project:
@@ -299,15 +290,6 @@ def code_endpoint(request: Request):
         return JSONResponse({"error": f"coding model call failed: {e}"}, status_code=500)
 
     return JSONResponse({"response": resp, "used_context": used_context})
-
-
-@app.post("/analyses/{analysis_id}/delete")
-def delete_analysis_endpoint(analysis_id: int):
-    try:
-        delete_analysis(DATABASE, analysis_id)
-        return JSONResponse({"deleted": True})
-    except Exception as e:
-        return JSONResponse({"deleted": False, "error": str(e)}, status_code=500)
 
 
 if __name__ == "__main__":

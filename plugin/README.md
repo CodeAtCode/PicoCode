@@ -45,22 +45,6 @@ The plugin ZIP will be in `build/distributions/`.
 - Python 3.8+ installed and in PATH
 - PicoCode backend dependencies installed (`pip install -r pyproject.toml`)
 
-## Project Structure
-
-```
-plugin/
-├── build.gradle.kts           # Gradle build configuration
-└── src/
-    └── main/
-        ├── kotlin/
-        │   └── com/picocode/
-        │       ├── PicoCodeToolWindowFactory.kt    # Tool window factory
-        │       └── PicoCodeToolWindowContent.kt    # Main UI and logic
-        └── resources/
-            └── META-INF/
-                └── plugin.xml                       # Plugin descriptor
-```
-
 ## Architecture
 
 1. **Server Management**: Plugin starts Python server as subprocess in project directory
