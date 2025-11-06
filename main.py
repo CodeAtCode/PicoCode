@@ -8,7 +8,6 @@ import json
 import uvicorn
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel
 
 from db import init_db, list_analyses, delete_analysis
 from analyzer import analyze_local_path_background, search_semantic, call_coding_model
@@ -16,6 +15,10 @@ from config import CFG  # loads .env
 from projects import (
     create_project, get_project, get_project_by_id, list_projects,
     update_project_status, delete_project, get_or_create_project
+)
+from models import (
+    CreateProjectRequest, IndexProjectRequest, 
+    QueryRequest, CodeCompletionRequest
 )
 
 DATABASE = CFG.get("database_path", "codebase.db")
@@ -34,27 +37,6 @@ app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-# Pydantic models for request/response
-class CreateProjectRequest(BaseModel):
-    path: str
-    name: Optional[str] = None
-
-class IndexProjectRequest(BaseModel):
-    project_id: str
-
-class QueryRequest(BaseModel):
-    project_id: str
-    query: str
-    top_k: Optional[int] = 5
-
-class CodeCompletionRequest(BaseModel):
-    project_id: str
-    prompt: str
-    context: Optional[str] = ""
-    use_rag: Optional[bool] = True
-    top_k: Optional[int] = 5
 
 
 # Project Management API (PyCharm-compatible)

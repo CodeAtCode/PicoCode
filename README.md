@@ -18,21 +18,6 @@ This tool is a way to achieve this!
 - Minimal web UI for starting analysis and asking questions (semantic search + coding model)
 - Health check and monitoring endpoints for production deployment
 
-## New Features (v0.2.0)
-
-### Per-Project Persistent Storage
-- Each opened project gets its own SQLite database
-- Isolated storage prevents cross-project data leakage
-- Project registry tracks all indexed projects
-- Automatic project ID generation based on path
-
-### PyCharm Plugin API
-- RESTful API designed for IDE integration
-- Create/manage projects via API
-- Background indexing with status tracking
-- Semantic search and code completion endpoints
-- See [PYCHARM_INTEGRATION.md](PYCHARM_INTEGRATION.md) for full API documentation
-
 ### PyCharm Plugin
 
 A full-featured PyCharm/IntelliJ IDEA plugin is available in the `plugin/` directory:
