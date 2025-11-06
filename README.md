@@ -39,6 +39,39 @@ Prerequisites
 - If you use Astral `uv`, install/configure `uv` according to the official docs:
   https://docs.astral.sh/uv/
 
+## Quick Start with API
+
+PicoCode now provides a production-ready REST API for IDE integration:
+
+```python
+import requests
+
+# 1. Start the server
+# python main.py
+
+# 2. Create/get a project
+response = requests.post("http://127.0.0.1:8000/api/projects", 
+    json={"path": "/path/to/your/project", "name": "My Project"})
+project = response.json()
+project_id = project["id"]
+
+# 3. Index the project
+requests.post("http://127.0.0.1:8000/api/projects/index",
+    json={"project_id": project_id})
+
+# 4. Query your codebase
+response = requests.post("http://127.0.0.1:8000/api/query",
+    json={"project_id": project_id, "query": "authentication flow"})
+results = response.json()
+
+# 5. Get code suggestions
+response = requests.post("http://127.0.0.1:8000/api/code",
+    json={"project_id": project_id, "prompt": "Explain the auth system"})
+suggestion = response.json()
+```
+
+See [PYCHARM_INTEGRATION.md](PYCHARM_INTEGRATION.md) for complete API documentation.
+
 ## Installation and run commands
 
 First step: Example .env (copy `.env.example` -> `.env` and edit)
