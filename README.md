@@ -33,6 +33,18 @@ This tool is a way to achieve this!
 - Semantic search and code completion endpoints
 - See [PYCHARM_INTEGRATION.md](PYCHARM_INTEGRATION.md) for full API documentation
 
+### PyCharm Plugin
+
+A full-featured PyCharm/IntelliJ IDEA plugin is available in the `plugin/` directory:
+
+- **Per-Project Indexing**: Automatically indexes current project
+- **Secure API Keys**: Stores credentials in IDE password safe
+- **Real-time Responses**: Streams answers from your coding model
+- **File Navigation**: Click retrieved files to open in editor
+- **Progress Indicators**: Visual feedback during indexing
+
+See [plugin/README.md](plugin/README.md) for installation and usage instructions.
+
 Prerequisites
 - Python 3.8+ (3.11+ recommended for builtin tomllib)
 - Git (optional, if you clone the repo)

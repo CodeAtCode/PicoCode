@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+# Import shared database utilities to avoid code duplication
+from db import _get_connection
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -75,13 +78,9 @@ def _init_registry_db():
     registry_path = _get_projects_registry_path()
     
     def _init():
-        conn = sqlite3.connect(registry_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
+        # Use shared connection helper from db.py to avoid code duplication
+        conn = _get_connection(registry_path)
         try:
-            # Enable WAL mode for better concurrency
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            
             cur = conn.cursor()
             cur.execute(
                 """
@@ -181,8 +180,8 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
     registry_path = _get_projects_registry_path()
     
     def _create():
-        conn = sqlite3.connect(registry_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
+        # Use shared connection helper from db.py
+        conn = _get_connection(registry_path)
         try:
             cur = conn.cursor()
             
@@ -245,8 +244,8 @@ def get_project(project_path: str) -> Optional[Dict[str, Any]]:
     registry_path = _get_projects_registry_path()
     
     def _get():
-        conn = sqlite3.connect(registry_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
+        # Use shared connection helper from db.py
+        conn = _get_connection(registry_path)
         try:
             cur = conn.cursor()
             cur.execute("SELECT * FROM projects WHERE path = ?", (project_path,))
@@ -273,8 +272,7 @@ def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
     registry_path = _get_projects_registry_path()
     
     def _get():
-        conn = sqlite3.connect(registry_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
+        conn = _get_connection(registry_path)
         try:
             cur = conn.cursor()
             cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
@@ -298,8 +296,7 @@ def list_projects() -> List[Dict[str, Any]]:
     registry_path = _get_projects_registry_path()
     
     def _list():
-        conn = sqlite3.connect(registry_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
+        conn = _get_connection(registry_path)
         try:
             cur = conn.cursor()
             cur.execute("SELECT * FROM projects ORDER BY created_at DESC")
@@ -325,7 +322,7 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
     registry_path = _get_projects_registry_path()
     
     def _update():
-        conn = sqlite3.connect(registry_path, timeout=10.0)
+        conn = _get_connection(registry_path)
         try:
             cur = conn.cursor()
             if last_indexed_at:
@@ -358,7 +355,7 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
     registry_path = _get_projects_registry_path()
     
     def _update():
-        conn = sqlite3.connect(registry_path, timeout=10.0)
+        conn = _get_connection(registry_path)
         try:
             cur = conn.cursor()
             cur.execute(
@@ -398,7 +395,7 @@ def delete_project(project_id: str):
     registry_path = _get_projects_registry_path()
     
     def _delete():
-        conn = sqlite3.connect(registry_path, timeout=10.0)
+        conn = _get_connection(registry_path)
         try:
             cur = conn.cursor()
             cur.execute("DELETE FROM projects WHERE id = ?", (project_id,))
