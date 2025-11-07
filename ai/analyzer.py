@@ -327,6 +327,12 @@ def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optio
         # Extract the chunk
         if CHUNK_SIZE <= 0:
             return content
+        
+        # Validate chunk_index
+        if chunk_index < 0:
+            logger.warning(f"Invalid chunk_index {chunk_index} for file_id={file_id}")
+            return None
+        
         step = max(1, CHUNK_SIZE - CHUNK_OVERLAP)
         start = chunk_index * step
         end = min(start + CHUNK_SIZE, len(content))

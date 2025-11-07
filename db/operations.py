@@ -234,14 +234,14 @@ def store_file(database_path, path, content, language, last_modified=None, file_
     sqlite 'database is locked' errors in multithreaded scenarios.
     Supports incremental indexing with last_modified and file_hash tracking.
     Note: Does not store full file content in database (only snippet), content is read from filesystem when needed.
+    The content parameter is still required to generate the snippet.
     Returns lastrowid (same as the previous store_file implementation).
     """
     snippet = (content[:512] if content else "")
     sql = """
-        INSERT INTO files (path, content, language, snippet, last_modified, file_hash, updated_at) 
-        VALUES (?, NULL, ?, ?, ?, ?, datetime('now'))
+        INSERT INTO files (path, language, snippet, last_modified, file_hash, updated_at) 
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(path) DO UPDATE SET 
-            content=NULL,
             language=excluded.language,
             snippet=excluded.snippet,
             last_modified=excluded.last_modified,
