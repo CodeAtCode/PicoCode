@@ -12,10 +12,10 @@ import concurrent.futures
 import threading
 
 from db import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
-from external_api import get_embedding_for_text, call_coding_api
+from .openai import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
 from utils.logger import get_logger
-from smart_chunker import smart_chunk
+from .smart_chunker import smart_chunk
 import logging
 
 # reduce noise from httpx used by external libs

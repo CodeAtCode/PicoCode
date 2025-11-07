@@ -4,7 +4,7 @@ LlamaIndex integration for document retrieval.
 from typing import List
 from llama_index.core import Document
 
-from external_api import get_embedding_for_text
+from .openai import get_embedding_for_text
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
