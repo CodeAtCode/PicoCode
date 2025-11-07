@@ -40,7 +40,7 @@ def api_health():
     - Monitoring systems
     - Service availability verification
     """
-    from main import _file_watcher
+    from utils.app_state import get_file_watcher
     
     health_data = {
         "status": "ok",
@@ -49,8 +49,9 @@ def api_health():
     }
     
     # Add file watcher status if available
-    if _file_watcher:
-        health_data["file_watcher"] = _file_watcher.get_status()
+    watcher = get_file_watcher()
+    if watcher:
+        health_data["file_watcher"] = watcher.get_status()
     
     return JSONResponse(health_data)
 

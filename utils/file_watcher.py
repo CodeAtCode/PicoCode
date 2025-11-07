@@ -41,6 +41,10 @@ class FileWatcher:
     automatic re-indexing when changes are detected.
     """
     
+    # Class constants for configuration limits
+    MIN_DEBOUNCE_SECONDS = 1
+    MIN_CHECK_INTERVAL = 5
+    
     def __init__(
         self,
         logger: Optional[logging.Logger] = None,
@@ -58,8 +62,8 @@ class FileWatcher:
             check_interval: Seconds between directory scans (default: 10)
         """
         self.enabled = enabled
-        self.debounce_seconds = max(1, debounce_seconds)
-        self.check_interval = max(5, check_interval)
+        self.debounce_seconds = max(self.MIN_DEBOUNCE_SECONDS, debounce_seconds)
+        self.check_interval = max(self.MIN_CHECK_INTERVAL, check_interval)
         
         # Set up logger
         if logger:
@@ -285,13 +289,15 @@ class FileWatcher:
     
     def _scan_directory(self, directory: str) -> Dict[str, str]:
         """
-        Scan a directory and return a dictionary of file paths to modification times.
+        Scan a directory and return a dictionary of file paths to file signatures.
+        
+        Uses both modification time and file size for better change detection.
         
         Args:
             directory: Directory path to scan
         
         Returns:
-            Dictionary mapping relative file paths to modification time hashes
+            Dictionary mapping relative file paths to signature (mtime:size)
         """
         file_hashes = {}
         
@@ -309,10 +315,12 @@ class FileWatcher:
                     filepath = os.path.join(root, filename)
                     
                     try:
-                        # Use modification time as a simple hash
-                        mtime = os.path.getmtime(filepath)
+                        # Use both modification time and file size as signature
+                        stat = os.stat(filepath)
+                        mtime = stat.st_mtime
+                        size = stat.st_size
                         relative_path = os.path.relpath(filepath, directory)
-                        file_hashes[relative_path] = str(mtime)
+                        file_hashes[relative_path] = f"{mtime}:{size}"
                     except (OSError, ValueError):
                         # Skip files we can't access
                         continue

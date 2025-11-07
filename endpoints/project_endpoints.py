@@ -48,9 +48,10 @@ def api_create_project(request: CreateProjectRequest):
         
         # Add project to file watcher if available
         try:
-            from main import _file_watcher
-            if _file_watcher and _file_watcher.is_running():
-                _file_watcher.add_project(project["id"], project["path"])
+            from utils.app_state import get_file_watcher
+            watcher = get_file_watcher()
+            if watcher and watcher.is_running():
+                watcher.add_project(project["id"], project["path"])
         except Exception as e:
             logger.warning(f"Could not add project to file watcher: {e}")
         
