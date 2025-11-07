@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any, List
 import concurrent.futures
 import threading
 
-from db import store_file, needs_reindex, set_project_metadata, get_project_metadata
+from db import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
 from external_api import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
 from logger import get_logger
@@ -474,10 +474,13 @@ def analyze_local_path_sync(
         duration = end_time - start_time
         
         try:
-            set_project_metadata(database_path, "last_indexed_at", time.strftime("%Y-%m-%d %H:%M:%S"))
-            set_project_metadata(database_path, "last_index_duration", str(duration))
-            set_project_metadata(database_path, "files_indexed", str(file_count))
-            set_project_metadata(database_path, "files_skipped", str(skipped_count))
+            # Use batch update for efficiency - single database transaction
+            set_project_metadata_batch(database_path, {
+                "last_indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "last_index_duration": str(duration),
+                "files_indexed": str(file_count),
+                "files_skipped": str(skipped_count)
+            })
         except Exception:
             logger.exception("Failed to store indexing metadata")
 

@@ -424,6 +424,34 @@ def set_project_metadata(database_path: str, key: str, value: str) -> None:
         conn.close()
 
 
+def set_project_metadata_batch(database_path: str, metadata: Dict[str, str]) -> None:
+    """
+    Set multiple project metadata key-value pairs in a single transaction.
+    More efficient than multiple set_project_metadata calls.
+    
+    Args:
+        database_path: Path to the database
+        metadata: Dictionary of key-value pairs to set
+    """
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        for key, value in metadata.items():
+            cur.execute(
+                """
+                INSERT INTO project_metadata (key, value, updated_at) 
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(key) DO UPDATE SET 
+                    value=excluded.value,
+                    updated_at=datetime('now')
+                """,
+                (key, value)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_project_metadata(database_path: str, key: str) -> Optional[str]:
     """
     Get a project metadata value by key.
