@@ -1,0 +1,66 @@
+"""
+Simple rate limiter middleware for FastAPI endpoints.
+"""
+import time
+import threading
+from typing import Dict, Tuple
+from collections import defaultdict
+
+
+class RateLimiter:
+    """
+    Token bucket rate limiter for API endpoints.
+    Thread-safe implementation.
+    """
+    
+    def __init__(self, calls: int = 100, window: int = 60):
+        """
+        Initialize rate limiter.
+        
+        Args:
+            calls: Maximum number of calls allowed
+            window: Time window in seconds
+        """
+        self.calls = calls
+        self.window = window
+        self._storage: Dict[str, list] = defaultdict(list)
+        self._lock = threading.Lock()
+    
+    def is_allowed(self, key: str) -> Tuple[bool, int]:
+        """
+        Check if request is allowed under rate limit.
+        
+        Args:
+            key: Identifier for rate limit (e.g., IP address)
+        
+        Returns:
+            Tuple of (allowed: bool, retry_after: int seconds)
+        """
+        with self._lock:
+            now = time.time()
+            timestamps = self._storage[key]
+            
+            # Remove timestamps outside the window
+            timestamps[:] = [ts for ts in timestamps if ts > now - self.window]
+            
+            if len(timestamps) >= self.calls:
+                # Rate limit exceeded
+                retry_after = int(timestamps[0] + self.window - now) + 1
+                return False, retry_after
+            
+            # Allow request and record timestamp
+            timestamps.append(now)
+            return True, 0
+    
+    def reset(self, key: str):
+        """Reset rate limit for a key."""
+        with self._lock:
+            if key in self._storage:
+                del self._storage[key]
+
+
+# Global rate limiters for different endpoint types
+# More permissive for queries, stricter for indexing operations
+query_limiter = RateLimiter(calls=100, window=60)  # 100 queries per minute
+indexing_limiter = RateLimiter(calls=10, window=60)  # 10 indexing operations per minute
+general_limiter = RateLimiter(calls=200, window=60)  # 200 general requests per minute

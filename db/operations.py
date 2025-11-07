@@ -3,11 +3,13 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 from functools import lru_cache
 
-from config import CFG  # config (keeps chunk_size etc if needed)
+from utils.config import CFG  # config (keeps chunk_size etc if needed)
 import atexit
 import threading
 import queue
-from logger import get_logger
+from utils.logger import get_logger
+from utils.cache import project_cache, stats_cache, file_cache
+from .db_task import _DBTask
 
 _LOG = get_logger(__name__)
 
@@ -19,13 +21,6 @@ _PREPARED_LOCK = threading.Lock()
 _WRITERS = {}
 _WRITERS_LOCK = threading.Lock()
 
-class _DBTask:
-    def __init__(self, sql, params):
-        self.sql = sql
-        self.params = params
-        self.event = threading.Event()
-        self.rowid = None
-        self.exception = None
 
 class DBWriter:
     def __init__(self, database_path, timeout_seconds=30):
@@ -173,43 +168,33 @@ def init_db(database_path: str) -> None:
     """
     Initialize database schema. Safe to call multiple times.
     Creates:
-    - analyses (embedding_count column kept for backward compat but not used as source of truth)
-    - files
+    - files (stores full content of indexed files with metadata for incremental indexing)
     - chunks (with embedding BLOB column for sqlite-vector)
+    - project_metadata (project-level tracking)
     """
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
-        # analyses table: embedding_count column kept for compatibility but will be computed live
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS analyses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                path TEXT NOT NULL,
-                status TEXT NOT NULL,
-                embedding_count INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now'))
-            )
-            """
-        )
-
+        
         # files table (stores full content, used to reconstruct chunks)
+        # Added last_modified and file_hash for incremental indexing
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                analysis_id INTEGER NOT NULL,
-                path TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
                 content TEXT,
                 language TEXT,
                 snippet TEXT,
+                last_modified REAL,
+                file_hash TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
+                updated_at TEXT DEFAULT (datetime('now'))
             )
             """
         )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_analysis ON files(analysis_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_files_hash ON files(file_hash);")
 
         # chunks table: metadata for chunked documents; includes embedding BLOB column
         cur.execute(
@@ -226,44 +211,43 @@ def init_db(database_path: str) -> None:
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);")
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def create_analysis(database_path: str, name: str, path: str, status: str = "pending") -> int:
-    conn = _get_connection(database_path)
-    try:
-        cur = conn.cursor()
+        
+        # project_metadata table for project-level tracking
         cur.execute(
-            "INSERT INTO analyses (name, path, status) VALUES (?, ?, ?)",
-            (name, path, status),
+            """
+            CREATE TABLE IF NOT EXISTS project_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+            """
         )
-        conn.commit()
-        return int(cur.lastrowid)
-    finally:
-        conn.close()
-
-
-def update_analysis_status(database_path: str, analysis_id: int, status: str) -> None:
-    conn = _get_connection(database_path)
-    try:
-        cur = conn.cursor()
-        cur.execute("UPDATE analyses SET status = ? WHERE id = ?", (status, analysis_id))
+        
         conn.commit()
     finally:
         conn.close()
 
 
-def store_file(database_path, analysis_id, path, content, language):
+def store_file(database_path, path, content, language, last_modified=None, file_hash=None):
     """
-    Insert a file record into the DB using a queued single-writer to avoid
+    Insert or update a file record into the DB using a queued single-writer to avoid
     sqlite 'database is locked' errors in multithreaded scenarios.
+    Supports incremental indexing with last_modified and file_hash tracking.
     Returns lastrowid (same as the previous store_file implementation).
     """
     snippet = (content[:512] if content else "")
-    sql = "INSERT INTO files (analysis_id, path, content, language, snippet) VALUES (?, ?, ?, ?, ?)"
-    params = (analysis_id, path, content, language, snippet)
+    sql = """
+        INSERT INTO files (path, content, language, snippet, last_modified, file_hash, updated_at) 
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(path) DO UPDATE SET 
+            content=excluded.content,
+            language=excluded.language,
+            snippet=excluded.snippet,
+            last_modified=excluded.last_modified,
+            file_hash=excluded.file_hash,
+            updated_at=datetime('now')
+    """
+    params = (path, content, language, snippet, last_modified, file_hash)
 
     writer = _get_writer(database_path)
     # We wait for the background writer to complete the insert and then return the row id.
@@ -289,76 +273,211 @@ def insert_chunk_row_with_null_embedding(database_path: str, file_id: int, path:
         conn.close()
 
 
-def list_analyses(database_path: str) -> List[Dict[str, Any]]:
+def get_project_stats(database_path: str) -> Dict[str, Any]:
     """
-    Return analyses with computed file_count and computed embedding_count (from chunks.embedding).
-    This ensures the UI shows accurate, up-to-date counts based on actual rows.
+    Get statistics for a project database.
+    Returns file_count and embedding_count.
+    Uses caching with 60s TTL.
     """
+    # Check cache first
+    cache_key = f"stats:{database_path}"
+    cached = stats_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
-        rows = cur.execute(
-            """
-            SELECT
-                a.id,
-                a.name,
-                a.path,
-                a.status,
-                (SELECT COUNT(*) FROM files f WHERE f.analysis_id = a.id) AS file_count,
-                (SELECT COUNT(*) FROM chunks ch JOIN files f2 ON ch.file_id = f2.id
-                    WHERE f2.analysis_id = a.id AND ch.embedding IS NOT NULL) AS embedding_count,
-                a.created_at
-            FROM analyses a
-            ORDER BY a.id DESC
-            """
-        ).fetchall()
-        results: List[Dict[str, Any]] = []
-        for r in rows:
-            results.append(
-                {
-                    "id": r["id"],
-                    "name": r["name"],
-                    "path": r["path"],
-                    "status": r["status"],
-                    "file_count": int(r["file_count"]),
-                    "embedding_count": int(r["embedding_count"]),
-                    "created_at": r["created_at"],
-                }
-            )
-        return results
+        
+        # Count files
+        cur.execute("SELECT COUNT(*) FROM files")
+        file_count = cur.fetchone()[0]
+        
+        # Count embeddings
+        cur.execute("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
+        embedding_count = cur.fetchone()[0]
+        
+        stats = {
+            "file_count": int(file_count),
+            "embedding_count": int(embedding_count)
+        }
+        
+        # Cache the result
+        stats_cache.set(cache_key, stats)
+        return stats
     finally:
         conn.close()
 
 
-def list_files_for_analysis(database_path: str, analysis_id: int) -> List[Dict[str, Any]]:
+def list_files(database_path: str) -> List[Dict[str, Any]]:
+    """
+    List all files in a project database.
+    """
     conn = _get_connection(database_path)
     try:
         rows = conn.execute(
-            "SELECT id, path, snippet FROM files WHERE analysis_id = ? ORDER BY id DESC", (analysis_id,)
+            "SELECT id, path, snippet, language, created_at FROM files ORDER BY id DESC"
         ).fetchall()
-        return [{"id": r["id"], "path": r["path"], "snippet": r["snippet"]} for r in rows]
+        return [
+            {
+                "id": r["id"], 
+                "path": r["path"], 
+                "snippet": r["snippet"],
+                "language": r["language"],
+                "created_at": r["created_at"]
+            } 
+            for r in rows
+        ]
     finally:
         conn.close()
 
 
-def delete_analysis(database_path: str, analysis_id: int) -> None:
+def clear_project_data(database_path: str) -> None:
     """
-    Delete an analysis and cascade-delete associated files / chunks.
-    Foreign key enforcement varies by SQLite build; do explicit deletes for safety.
+    Clear all files and chunks from a project database.
+    Used when re-indexing a project.
+    Invalidates caches.
     """
     conn = _get_connection(database_path)
     try:
         cur = conn.cursor()
-        # delete chunks for files in analysis
-        cur.execute(
-            "DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE analysis_id = ?)",
-            (analysis_id,),
-        )
-        # delete files
-        cur.execute("DELETE FROM files WHERE analysis_id = ?", (analysis_id,))
-        # delete analysis row
-        cur.execute("DELETE FROM analyses WHERE id = ?", (analysis_id,))
+        # Delete chunks first due to foreign key
+        cur.execute("DELETE FROM chunks")
+        # Delete files
+        cur.execute("DELETE FROM files")
         conn.commit()
+        
+        # Invalidate caches
+        stats_cache.invalidate(f"stats:{database_path}")
+        file_cache.clear()  # Clear all file cache since we deleted everything
+    finally:
+        conn.close()
+
+
+def get_file_by_path(database_path: str, path: str) -> Optional[Dict[str, Any]]:
+    """
+    Get file metadata by path for incremental indexing checks.
+    Returns None if file doesn't exist.
+    """
+    conn = _get_connection(database_path)
+    try:
+        row = conn.execute(
+            "SELECT id, path, last_modified, file_hash FROM files WHERE path = ?",
+            (path,)
+        ).fetchone()
+        if row:
+            return {
+                "id": row["id"],
+                "path": row["path"],
+                "last_modified": row["last_modified"],
+                "file_hash": row["file_hash"]
+            }
+        return None
+    finally:
+        conn.close()
+
+
+def needs_reindex(database_path: str, path: str, current_mtime: float, current_hash: str) -> bool:
+    """
+    Check if a file needs to be re-indexed based on modification time and hash.
+    Returns True if file is new or has changed.
+    """
+    existing = get_file_by_path(database_path, path)
+    if not existing:
+        return True
+    
+    # Check if modification time or hash changed
+    if existing["last_modified"] is None or existing["file_hash"] is None:
+        return True
+    
+    if existing["last_modified"] != current_mtime or existing["file_hash"] != current_hash:
+        return True
+    
+    return False
+
+
+def set_project_metadata(database_path: str, key: str, value: str) -> None:
+    """
+    Set a project metadata key-value pair.
+    """
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO project_metadata (key, value, updated_at) 
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET 
+                value=excluded.value,
+                updated_at=datetime('now')
+            """,
+            (key, value)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_project_metadata_batch(database_path: str, metadata: Dict[str, str]) -> None:
+    """
+    Set multiple project metadata key-value pairs in a single transaction.
+    More efficient than multiple set_project_metadata calls.
+    
+    Args:
+        database_path: Path to the database
+        metadata: Dictionary of key-value pairs to set
+    """
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        for key, value in metadata.items():
+            cur.execute(
+                """
+                INSERT INTO project_metadata (key, value, updated_at) 
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(key) DO UPDATE SET 
+                    value=excluded.value,
+                    updated_at=datetime('now')
+                """,
+                (key, value)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_project_metadata(database_path: str, key: str) -> Optional[str]:
+    """
+    Get a project metadata value by key.
+    """
+    conn = _get_connection(database_path)
+    try:
+        row = conn.execute(
+            "SELECT value FROM project_metadata WHERE key = ?",
+            (key,)
+        ).fetchone()
+        return row["value"] if row else None
+    finally:
+        conn.close()
+
+
+def delete_file_by_path(database_path: str, path: str) -> None:
+    """
+    Delete a file and its chunks by path.
+    Used for incremental indexing when files are removed.
+    """
+    conn = _get_connection(database_path)
+    try:
+        cur = conn.cursor()
+        # Get file_id
+        row = cur.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
+        if row:
+            file_id = row["id"]
+            # Delete chunks first
+            cur.execute("DELETE FROM chunks WHERE file_id = ?", (file_id,))
+            # Delete file
+            cur.execute("DELETE FROM files WHERE id = ?", (file_id,))
+            conn.commit()
     finally:
         conn.close()
 
@@ -548,14 +667,17 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
             
             cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
             row = cur.fetchone()
-            return dict(row) if row else None
+            result = dict(row) if row else None
+            # Cache the newly created project
+            if result:
+                project_cache.set(f"project:id:{project_id}", result)
+                project_cache.set(f"project:path:{project_path}", result)
+            return result
         finally:
             conn.close()
     
     try:
         result = _retry_on_db_locked(_create)
-        # Invalidate cache after creating a new project
-        _get_project_by_id_cached.cache_clear()
         return result
     except Exception as e:
         _LOG.error(f"Failed to create project: {e}")
@@ -563,9 +685,15 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
 
 
 def get_project(project_path: str) -> Optional[Dict[str, Any]]:
-    """Get project metadata by path."""
+    """Get project metadata by path with caching."""
     _init_registry_db()
     project_path = os.path.abspath(project_path)
+    
+    # Check cache first
+    cache_key = f"project:path:{project_path}"
+    cached = project_cache.get(cache_key)
+    if cached is not None:
+        return cached
     
     registry_path = _get_projects_registry_path()
     
@@ -575,26 +703,10 @@ def get_project(project_path: str) -> Optional[Dict[str, Any]]:
             cur = conn.cursor()
             cur.execute("SELECT * FROM projects WHERE path = ?", (project_path,))
             row = cur.fetchone()
-            return dict(row) if row else None
-        finally:
-            conn.close()
-    
-    return _retry_on_db_locked(_get)
-
-
-@lru_cache(maxsize=128)
-def _get_project_by_id_cached(project_id: str, registry_path: str) -> Optional[tuple]:
-    """Internal cached function that returns immutable tuple."""
-    def _get():
-        conn = _get_connection(registry_path)
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
-            row = cur.fetchone()
-            if row:
-                # Convert row to tuple of key-value pairs for immutability
-                return tuple(dict(row).items())
-            return None
+            result = dict(row) if row else None
+            if result:
+                project_cache.set(cache_key, result)
+            return result
         finally:
             conn.close()
     
@@ -605,11 +717,28 @@ def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
     """Get project metadata by ID with caching."""
     _init_registry_db()
     
-    registry_path = _get_projects_registry_path()
-    cached_result = _get_project_by_id_cached(project_id, registry_path)
+    # Check cache first
+    cache_key = f"project:id:{project_id}"
+    cached = project_cache.get(cache_key)
+    if cached is not None:
+        return cached
     
-    # Convert tuple back to dict
-    return dict(cached_result) if cached_result else None
+    registry_path = _get_projects_registry_path()
+    
+    def _get():
+        conn = _get_connection(registry_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+            row = cur.fetchone()
+            result = dict(row) if row else None
+            if result:
+                project_cache.set(cache_key, result)
+            return result
+        finally:
+            conn.close()
+    
+    return _retry_on_db_locked(_get)
 
 
 def list_projects() -> List[Dict[str, Any]]:
@@ -657,7 +786,7 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
     
     _retry_on_db_locked(_update)
     # Invalidate cache after update
-    _get_project_by_id_cached.cache_clear()
+    project_cache.invalidate(f"project:id:{project_id}")
 
 
 def update_project_settings(project_id: str, settings: Dict[str, Any]):
@@ -681,7 +810,7 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
     
     _retry_on_db_locked(_update)
     # Invalidate cache after update
-    _get_project_by_id_cached.cache_clear()
+    project_cache.invalidate(f"project:id:{project_id}")
 
 
 def delete_project(project_id: str):
@@ -712,7 +841,9 @@ def delete_project(project_id: str):
     
     _retry_on_db_locked(_delete)
     # Invalidate cache after deletion
-    _get_project_by_id_cached.cache_clear()
+    project_cache.invalidate(f"project:id:{project_id}")
+    if project.get("path"):
+        project_cache.invalidate(f"project:path:{project['path']}")
 
 
 def get_or_create_project(project_path: str, name: Optional[str] = None) -> Dict[str, Any]:

@@ -4,16 +4,18 @@ import time
 import traceback
 import sqlite3
 import importlib.resources
+import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 import concurrent.futures
 import threading
 
-from db import create_analysis, store_file, update_analysis_status
-from external_api import get_embedding_for_text, call_coding_api
+from db.operations import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
+from .openai import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
-from logger import get_logger
+from utils.logger import get_logger
+from .smart_chunker import smart_chunk
 import logging
 
 # reduce noise from httpx used by external libs
@@ -69,6 +71,13 @@ def detect_language(path: str):
         return "text"
     ext = Path(path).suffix.lower()
     return EXT_LANG.get(ext, "text")
+
+
+def compute_file_hash(content: str) -> str:
+    """
+    Compute SHA256 hash of file content for change detection.
+    """
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
 # Simple chunker (character-based). Tunable CHUNK_SIZE, CHUNK_OVERLAP.
@@ -268,37 +277,46 @@ def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optio
 def _process_file_sync(
     semaphore: threading.Semaphore,
     database_path: str,
-    analysis_id: int,
     full_path: str,
     rel_path: str,
     cfg: Optional[Dict[str, Any]],
+    incremental: bool = True,
 ):
     """
     Synchronous implementation of per-file processing.
     Intended to run on a ThreadPoolExecutor worker thread.
-    Returns a dict: {"stored": bool, "embedded": bool}
+    Returns a dict: {"stored": bool, "embedded": bool, "skipped": bool}
     """
     try:
         # read file content
         try:
             with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
                 content = fh.read()
+            # Get file modification time
+            mtime = os.path.getmtime(full_path)
         except Exception:
-            return {"stored": False, "embedded": False}
+            return {"stored": False, "embedded": False, "skipped": False}
 
         if not content:
-            return {"stored": False, "embedded": False}
+            return {"stored": False, "embedded": False, "skipped": False}
 
         lang = detect_language(rel_path)
         if lang == "text":
-            return {"stored": False, "embedded": False}
+            return {"stored": False, "embedded": False, "skipped": False}
 
-        # store file (synchronous DB writer)
+        # Compute hash for change detection
+        file_hash = compute_file_hash(content)
+        
+        # Check if file needs reindexing (incremental mode)
+        if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
+            return {"stored": False, "embedded": False, "skipped": True}
+
+        # store file (synchronous DB writer) with metadata
         try:
-            fid = store_file(database_path, analysis_id, rel_path, content, lang)
+            fid = store_file(database_path, rel_path, content, lang, mtime, file_hash)
         except Exception:
-            logger.exception("Failed to store file %s for analysis %s", rel_path, analysis_id)
-            return {"stored": False, "embedded": False}
+            logger.exception("Failed to store file %s", rel_path)
+            return {"stored": False, "embedded": False, "skipped": False}
 
         _ = Document(text=content, extra_info={"path": rel_path, "lang": lang})
 
@@ -306,7 +324,15 @@ def _process_file_sync(
         if isinstance(cfg, dict):
             embedding_model = cfg.get("embedding_model")
 
-        chunks = chunk_text(content, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        # Use smart chunking for supported code languages
+        use_smart_chunking = cfg.get("smart_chunking", True) if isinstance(cfg, dict) else True
+        supported_languages = ["python", "javascript", "typescript", "java", "go", "rust", "c", "cpp"]
+        
+        if use_smart_chunking and lang in supported_languages:
+            chunks = smart_chunk(content, language=lang, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        else:
+            chunks = chunk_text(content, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        
         if not chunks:
             chunks = [content]
 
@@ -373,7 +399,7 @@ def _process_file_sync(
                     except Exception:
                         logger.exception("Failed to write empty-embedding error to disk for %s chunk %d", rel_path, idx)
 
-        return {"stored": True, "embedded": embedded_any}
+        return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
         tb = traceback.format_exc()
         try:
@@ -384,7 +410,7 @@ def _process_file_sync(
                 logger.exception("Failed to write exception error to disk for file %s", rel_path)
         except Exception:
             logger.exception("Failed while handling exception for file %s", rel_path)
-        return {"stored": False, "embedded": False}
+        return {"stored": False, "embedded": False, "skipped": False}
 
 
 def analyze_local_path_sync(
@@ -393,19 +419,20 @@ def analyze_local_path_sync(
     venv_path: Optional[str] = None,
     max_file_size: int = 200000,
     cfg: Optional[dict] = None,
+    incremental: bool = True,
 ):
     """
     Synchronous implementation of the analysis pipeline.
-    Submits per-file tasks to a shared ThreadPoolExecutor and updates DB counts/status synchronously.
+    Submits per-file tasks to a shared ThreadPoolExecutor.
+    Supports incremental indexing to skip unchanged files.
     """
-    aid = None
     semaphore = threading.Semaphore(EMBEDDING_CONCURRENCY)
+    start_time = time.time()
+    
     try:
-        name = os.path.basename(os.path.abspath(local_path)) or local_path
-        aid = create_analysis(database_path, name, local_path, "running")
-
         file_count = 0
         emb_count = 0
+        skipped_count = 0
         file_paths: List[Dict[str, str]] = []
 
         # Collect files to process
@@ -431,10 +458,10 @@ def analyze_local_path_sync(
                     _process_file_sync,
                     semaphore,
                     database_path,
-                    aid,
                     f["full"],
                     f["rel"],
                     cfg,
+                    incremental,
                 )
                 futures.append(fut)
 
@@ -446,8 +473,25 @@ def analyze_local_path_sync(
                             file_count += 1
                         if r.get("embedded"):
                             emb_count += 1
+                        if r.get("skipped"):
+                            skipped_count += 1
                 except Exception:
-                    logger.exception("A per-file task failed for analysis %s", aid)
+                    logger.exception("A per-file task failed")
+
+        # Store indexing metadata
+        end_time = time.time()
+        duration = end_time - start_time
+        
+        try:
+            # Use batch update for efficiency - single database transaction
+            set_project_metadata_batch(database_path, {
+                "last_indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "last_index_duration": str(duration),
+                "files_indexed": str(file_count),
+                "files_skipped": str(skipped_count)
+            })
+        except Exception:
+            logger.exception("Failed to store indexing metadata")
 
         # store uv_detected.json metadata if possible
         uv_info = None
@@ -457,9 +501,9 @@ def analyze_local_path_sync(
             uv_info = None
 
         try:
-            store_file(
+            # Metadata storage is non-critical, ignore return value
+            _ = store_file(
                 database_path,
-                aid,
                 "uv_detected.json",
                 json.dumps(uv_info, indent=2),
                 "meta",
@@ -468,34 +512,9 @@ def analyze_local_path_sync(
             try:
                 print("Failed to store uv_detected.json in DB")
             except Exception:
-                logger.exception("Failed to write uv_detected meta error to disk for analysis %s", aid)
-
-        # final counts & status
-        try:
-            # update_analysis_counts may be defined elsewhere; call if present
-            try:
-                update_analysis_counts  # type: ignore
-                update_analysis_counts(database_path, aid, file_count, emb_count)  # type: ignore
-            except NameError:
-                # function not present; skip
-                pass
-        except Exception:
-            logger.exception("Failed to update analysis counts for %s", aid)
-
-        try:
-            update_analysis_status(database_path, aid, "completed")
-        except Exception:
-            logger.exception("Failed to set analysis status to completed for %s", aid)
+                logger.exception("Failed to write uv_detected meta error")
 
     except Exception:
-        try:
-            if aid:
-                try:
-                    update_analysis_status(database_path, aid, "failed")
-                except Exception:
-                    pass
-        except Exception:
-            pass
         traceback.print_exc()
 
 
@@ -534,7 +553,7 @@ def cosine(a, b):
     return sum(x * y for x, y in zip(a, b)) / (na * nb)
 
 
-def search_semantic(query: str, database_path: str, analysis_id: int, top_k: int = 5):
+def search_semantic(query: str, database_path: str, top_k: int = 5):
     """
     Uses sqlite-vector's vector_full_scan to retrieve best-matching chunks and returns
     a list of {file_id, path, chunk_index, score}.
@@ -559,18 +578,7 @@ def llama_index_retrieve_documents(query: str, database_path: str, top_k: int = 
     """
     Return llama_index.core.Document objects for the top_k matching chunks using sqlite-vector.
     """
-    q_emb = get_embedding_for_text(query)
-    if not q_emb:
-        return []
-
-    rows = _search_vectors(database_path, q_emb, top_k=top_k)
-    docs: List[Document] = []
-    for r in rows:
-        fid = r.get("file_id")
-        path = r.get("path")
-        chunk_idx = r.get("chunk_index", 0)
-        score = r.get("score", 0.0)
-        chunk_text = _get_chunk_text(database_path, fid, chunk_idx) or ""
-        doc = Document(text=chunk_text, extra_info={"path": path, "file_id": fid, "chunk_index": chunk_idx, "score": score})
-        docs.append(doc)
-    return docs
+    from .llama_integration import llama_index_retrieve_documents as _llama_retrieve
+    return _llama_retrieve(query, database_path, top_k, 
+                          search_func=_search_vectors, 
+                          get_chunk_func=_get_chunk_text)
