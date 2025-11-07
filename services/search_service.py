@@ -4,9 +4,9 @@ Handles semantic search and query processing.
 """
 from typing import Dict, Any, List, Optional
 
-from ai import search_semantic
-from db import get_project_by_id, get_project_stats
-from cache import search_cache
+from ai.analyzer import search_semantic
+from db.operations import get_project_by_id, get_project_stats
+from utils.cache import search_cache
 from utils.logger import get_logger
 import hashlib
 

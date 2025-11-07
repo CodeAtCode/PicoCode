@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any, List
 import concurrent.futures
 import threading
 
-from db import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
+from db.operations import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
 from .openai import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
 from utils.logger import get_logger

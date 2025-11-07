@@ -2,6 +2,8 @@
 
 # PicoCode - Local Codebase Assistant
 
+> 🤖 **Note**: This project was fully generated and developed using GitHub Copilot, demonstrating the power of AI-assisted development.
+
 <img src="https://github.com/user-attachments/assets/146f5fd1-45cf-4164-b981-635e0db3b791" />
 
 Are you looking for a simple way to asks question to your codebase using the inference provider you want without to be locked to a specific service?
@@ -10,7 +12,7 @@ This tool is a way to achieve this!
 ## Overview
 
 - **Production-ready RAG backend** with per-project persistent storage
-- **PyCharm/IDE integration** via REST API (see [PYCHARM_INTEGRATION.md](PYCHARM_INTEGRATION.md))
+- **PyCharm/IDE integration** via REST API (see [REST_API.md](REST_API.md))
 - **Per-project databases**: Each project gets isolated SQLite database
 - Indexes files, computes embeddings using an OpenAI-compatible embedding endpoint
 - Stores vector embeddings in SQLite using sqlite-vector for fast semantic search
@@ -20,17 +22,19 @@ This tool is a way to achieve this!
 
 ### PyCharm Plugin
 
-A full-featured PyCharm/IntelliJ IDEA plugin is available in the `plugin/` directory:
+A full-featured PyCharm/IntelliJ IDEA plugin is available:
 
+- **Download**: Get the latest plugin from [Releases](https://github.com/CodeAtCode/PicoCode/releases)
 - **Per-Project Indexing**: Automatically indexes current project
 - **Secure API Keys**: Stores credentials in IDE password safe
 - **Real-time Responses**: Streams answers from your coding model
 - **File Navigation**: Click retrieved files to open in editor
 - **Progress Indicators**: Visual feedback during indexing
 
-See [plugin/README.md](plugin/README.md) for installation and usage instructions.
+See [ide-plugins/README.md](ide-plugins/README.md) for building and installation instructions.
 
-Prerequisites
+## Prerequisites
+
 - Python 3.8+ (3.11+ recommended for builtin tomllib)
 - Git (optional, if you clone the repo)
 - If you use Astral `uv`, install/configure `uv` according to the official docs:

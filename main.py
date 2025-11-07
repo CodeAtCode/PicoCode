@@ -8,10 +8,12 @@ from contextlib import asynccontextmanager
 import os
 import uvicorn
 
-from db import get_or_create_project
+from db.operations import get_or_create_project
 from utils.config import CFG
 from utils.logger import get_logger
-from endpoints import project_router, query_router, web_router
+from endpoints.project_endpoints import router as project_router
+from endpoints.query_endpoints import router as query_router
+from endpoints.web_endpoints import router as web_router
 
 logger = get_logger(__name__)
 

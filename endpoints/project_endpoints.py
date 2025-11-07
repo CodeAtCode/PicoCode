@@ -6,12 +6,12 @@ from fastapi.responses import JSONResponse
 import os
 from datetime import datetime
 
-from db import (
+from db.operations import (
     get_project_by_id, list_projects,
-    update_project_status, delete_project, get_or_create_project,
-    CreateProjectRequest, IndexProjectRequest
+    update_project_status, delete_project, get_or_create_project
 )
-from ai import analyze_local_path_background
+from db.models import CreateProjectRequest, IndexProjectRequest
+from ai.analyzer import analyze_local_path_background
 from utils.logger import get_logger
 from utils.config import CFG
 from .rate_limiter import indexing_limiter

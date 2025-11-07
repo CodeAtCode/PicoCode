@@ -8,7 +8,7 @@ import atexit
 import threading
 import queue
 from utils.logger import get_logger
-from cache import project_cache, stats_cache, file_cache
+from utils.cache import project_cache, stats_cache, file_cache
 from .db_task import _DBTask
 
 _LOG = get_logger(__name__)

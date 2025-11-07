@@ -4,8 +4,8 @@ Query and search API endpoints.
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from db import QueryRequest
-from services import SearchService
+from db.models import QueryRequest
+from services.search_service import SearchService
 from utils.logger import get_logger
 from .rate_limiter import query_limiter
 

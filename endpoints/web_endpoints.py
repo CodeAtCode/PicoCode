@@ -8,11 +8,11 @@ import os
 import json
 from datetime import datetime
 
-from db import (
+from db.operations import (
     get_project_by_id, list_projects, get_project_stats,
     update_project_status, delete_project, get_or_create_project
 )
-from ai import analyze_local_path_background, search_semantic, call_coding_model
+from ai.analyzer import analyze_local_path_background, search_semantic, call_coding_model
 from utils.logger import get_logger
 from utils.config import CFG
 
