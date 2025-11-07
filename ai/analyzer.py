@@ -260,10 +260,8 @@ def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optio
     Uses project_path metadata and file path to read the actual file.
     
     Security: Validates that the resolved file path is within the project directory
-    to prevent path traversal attacks.
+    to prevent path traversal attacks using os.path.commonpath for cross-platform safety.
     """
-    from db.operations import get_project_metadata
-    
     conn = _connect_db(database_path)
     try:
         cur = conn.cursor()
@@ -285,13 +283,20 @@ def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optio
             logger.error("Project path not found in metadata, cannot read file from filesystem")
             raise RuntimeError("Project path metadata is missing - indexing may not have completed properly")
         
-        # Construct full file path and normalize to prevent path traversal
-        full_path = os.path.normpath(os.path.join(project_path, file_path))
-        normalized_project_path = os.path.normpath(project_path)
+        # Construct full file path and resolve to absolute path
+        full_path = os.path.abspath(os.path.join(project_path, file_path))
+        normalized_project_path = os.path.abspath(project_path)
         
         # Security check: ensure the resolved path is within the project directory
-        if not full_path.startswith(normalized_project_path + os.sep) and full_path != normalized_project_path:
-            logger.error(f"Path traversal attempt detected: {file_path} resolves outside project directory")
+        # Using os.path.commonpath for cross-platform safety (handles Windows/Unix path separators)
+        try:
+            common = os.path.commonpath([full_path, normalized_project_path])
+            if common != normalized_project_path:
+                logger.error(f"Path traversal attempt detected: {file_path} resolves outside project directory")
+                return None
+        except ValueError:
+            # Different drives on Windows
+            logger.error(f"Path traversal attempt detected: {file_path} is on a different drive")
             return None
         
         # Read file content from filesystem
