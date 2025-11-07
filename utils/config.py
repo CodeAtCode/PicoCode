@@ -37,4 +37,8 @@ CFG = {
     # uvicorn host/port (from .env)
     "uvicorn_host": os.getenv("UVICORN_HOST", "127.0.0.1"),
     "uvicorn_port": int(os.getenv("UVICORN_PORT", "8000")),
+
+    # IndexSyncAgent configuration
+    "index_sync_enabled": _bool_env("INDEX_SYNC_ENABLED", True),
+    "index_sync_interval": _int_env("INDEX_SYNC_INTERVAL", 30),
 }
