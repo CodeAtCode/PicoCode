@@ -15,18 +15,18 @@ from utils.logger import get_logger
 from endpoints.project_endpoints import router as project_router
 from endpoints.query_endpoints import router as query_router
 from endpoints.web_endpoints import router as web_router
-from ai.agents import IndexSyncAgent
+from utils.file_watcher import FileWatcher
 
 logger = get_logger(__name__)
 
-# Global IndexSyncAgent instance
-_index_sync_agent = None
+# Global FileWatcher instance
+_file_watcher = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    global _index_sync_agent
+    global _file_watcher
     
     # Project registry is auto-initialized when needed via create_project
     
@@ -38,32 +38,42 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Could not create default project: {e}")
     
-    # Start IndexSyncAgent if enabled
-    if CFG.get("index_sync_enabled", True):
+    # Start FileWatcher if enabled
+    if CFG.get("file_watcher_enabled", True):
         try:
-            _index_sync_agent = IndexSyncAgent(
-                db_client=db_operations,
-                interval_seconds=CFG.get("index_sync_interval", 30),
+            _file_watcher = FileWatcher(
                 logger=logger,
-                enabled=True
+                enabled=True,
+                debounce_seconds=CFG.get("file_watcher_debounce", 5),
+                check_interval=CFG.get("file_watcher_interval", 10)
             )
-            _index_sync_agent.start()
-            logger.info("IndexSyncAgent started successfully")
+            
+            # Add all existing projects to the watcher
+            try:
+                projects = db_operations.list_projects()
+                for project in projects:
+                    if project.get("path") and os.path.exists(project["path"]):
+                        _file_watcher.add_project(project["id"], project["path"])
+            except Exception as e:
+                logger.warning(f"Could not add projects to file watcher: {e}")
+            
+            _file_watcher.start()
+            logger.info("FileWatcher started successfully")
         except Exception as e:
-            logger.error(f"Failed to start IndexSyncAgent: {e}")
-            _index_sync_agent = None
+            logger.error(f"Failed to start FileWatcher: {e}")
+            _file_watcher = None
     else:
-        logger.info("IndexSyncAgent is disabled in configuration")
+        logger.info("FileWatcher is disabled in configuration")
     
     yield
     
-    # Stop IndexSyncAgent on shutdown
-    if _index_sync_agent:
+    # Stop FileWatcher on shutdown
+    if _file_watcher:
         try:
-            _index_sync_agent.stop()
-            logger.info("IndexSyncAgent stopped successfully")
+            _file_watcher.stop()
+            logger.info("FileWatcher stopped successfully")
         except Exception as e:
-            logger.error(f"Error stopping IndexSyncAgent: {e}")
+            logger.error(f"Error stopping FileWatcher: {e}")
 
 
 app = FastAPI(

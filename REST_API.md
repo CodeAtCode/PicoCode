@@ -101,7 +101,7 @@ Returns list of all registered projects.
 GET /api/projects/{project_id}
 ```
 
-Returns details for a specific project.
+Returns details for a specific project including indexing statistics.
 
 **Response:**
 ```json
@@ -112,9 +112,19 @@ Returns details for a specific project.
   "database_path": "~/.picocode/projects/1234567890abcdef.db",
   "status": "ready",
   "created_at": "2025-11-06T14:30:00",
-  "last_indexed_at": "2025-11-06T15:00:00"
+  "last_indexed_at": "2025-11-06T15:00:00",
+  "indexing_stats": {
+    "file_count": 150,
+    "embedding_count": 450,
+    "is_indexed": true
+  }
 }
 ```
+
+**Indexing Stats Fields:**
+- `file_count`: Number of files indexed in the project
+- `embedding_count`: Number of embeddings (chunks) generated
+- `is_indexed`: Boolean indicating if project has any indexed files
 
 ### Delete Project
 

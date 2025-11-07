@@ -63,7 +63,13 @@
                     <div class="flex-grow-1">
                       <div class="fw-bold">{{ p.name or p.path.split('/')[-1] }}</div>
                       <small class="text-muted">{{ p.path }}</small><br>
-                      <small class="text-muted">Status: <span class="badge bg-{{ 'success' if p.status=='ready' else 'warning' }}">{{ p.status }}</span></small>
+                      <small class="text-muted">
+                        Status: <span class="badge bg-{{ 'success' if p.status=='ready' else ('warning' if p.status=='indexing' else 'secondary') }}" data-status="{{ p.status }}">{{ p.status }}</span>
+                      </small>
+                      <br>
+                      <small class="text-muted indexing-info" style="display:none;">
+                        Files: <span class="file-count">0</span> | Embeddings: <span class="embedding-count">0</span>
+                      </small>
                     </div>
                     <div>
                       <form action="/projects/{{ p.id }}" method="post" style="display:inline;" onsubmit="return confirm('Delete this project and its database?');">
@@ -262,14 +268,14 @@
       firstProject.classList.add("active");
     }
 
-    // Poll for project status updates
+    // Poll for project status updates with detailed stats
     setInterval(async () => {
       try {
         const response = await fetch("/projects/status");
         const projects = await response.json();
         
-        // Update project status badges
-        projects.forEach(p => {
+        // Update project status badges and stats
+        for (const p of projects) {
           const item = document.querySelector(`[data-project-id="${p.id}"]`);
           if (item) {
             const badge = item.querySelector('.badge');
@@ -277,8 +283,34 @@
               badge.className = `badge bg-${p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary'}`;
               badge.textContent = p.status;
             }
+            
+            // Fetch detailed stats for this project
+            try {
+              const detailResponse = await fetch(`/api/projects/${p.id}`);
+              const details = await detailResponse.json();
+              
+              if (details.indexing_stats) {
+                const indexingInfo = item.querySelector('.indexing-info');
+                const fileCount = item.querySelector('.file-count');
+                const embeddingCount = item.querySelector('.embedding-count');
+                
+                if (indexingInfo && fileCount && embeddingCount) {
+                  fileCount.textContent = details.indexing_stats.file_count || 0;
+                  embeddingCount.textContent = details.indexing_stats.embedding_count || 0;
+                  
+                  // Show stats if project has been indexed
+                  if (details.indexing_stats.file_count > 0) {
+                    indexingInfo.style.display = 'block';
+                  } else {
+                    indexingInfo.style.display = 'none';
+                  }
+                }
+              }
+            } catch (detailErr) {
+              // Ignore errors fetching individual project details
+            }
           }
-        });
+        }
       } catch (err) {
         console.error("Error polling status:", err);
       }

@@ -33,24 +33,24 @@ def api_health():
     - **status**: "ok" if service is running
     - **version**: API version
     - **features**: List of enabled features
-    - **index_sync_agent**: Status of the IndexSyncAgent (if enabled)
+    - **file_watcher**: Status of the FileWatcher (if enabled)
     
     Use this endpoint for:
     - Load balancer health checks
     - Monitoring systems
     - Service availability verification
     """
-    from main import _index_sync_agent
+    from main import _file_watcher
     
     health_data = {
         "status": "ok",
         "version": "0.2.0",
-        "features": ["rag", "per-project-db", "pycharm-api", "incremental-indexing", "rate-limiting", "caching", "index-sync-agent"]
+        "features": ["rag", "per-project-db", "pycharm-api", "incremental-indexing", "rate-limiting", "caching", "file-watcher"]
     }
     
-    # Add agent status if available
-    if _index_sync_agent:
-        health_data["index_sync_agent"] = _index_sync_agent.get_status()
+    # Add file watcher status if available
+    if _file_watcher:
+        health_data["file_watcher"] = _file_watcher.get_status()
     
     return JSONResponse(health_data)
 
