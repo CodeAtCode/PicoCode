@@ -536,8 +536,8 @@ def analyze_local_path_sync(
         total_files = len(file_paths)
         logger.info(f"Found {total_files} files to process")
         
-        # Thread-safe counter for progress tracking: [count, lock]
-        processed_count = [0, threading.Lock()]
+        # Thread-safe counters: [submitted_count, completed_count, lock]
+        counters = [0, 0, threading.Lock()]
 
         # Process files in chunks to avoid too many futures at once.
         CHUNK_SUBMIT = 256
@@ -546,9 +546,9 @@ def analyze_local_path_sync(
             futures = []
             for f in chunk:
                 # Increment counter before starting file processing
-                with processed_count[1]:
-                    processed_count[0] += 1
-                    file_num = processed_count[0]
+                with counters[2]:
+                    counters[0] += 1
+                    file_num = counters[0]
                 
                 fut = _EXECUTOR.submit(
                     _process_file_sync,
@@ -567,6 +567,12 @@ def analyze_local_path_sync(
                 try:
                     r = fut.result()
                     
+                    # Increment completed counter and check for periodic logging
+                    with counters[2]:
+                        counters[1] += 1
+                        completed_count = counters[1]
+                        should_log = completed_count % 10 == 0
+                    
                     if isinstance(r, dict):
                         if r.get("stored"):
                             file_count += 1
@@ -576,10 +582,8 @@ def analyze_local_path_sync(
                             skipped_count += 1
                         
                         # Log periodic progress updates (every 10 files)
-                        with processed_count[1]:
-                            current_processed = processed_count[0]
-                        if current_processed % 10 == 0:
-                            logger.info(f"Progress: {current_processed}/{total_files} files processed ({file_count} stored, {emb_count} with embeddings, {skipped_count} skipped)")
+                        if should_log:
+                            logger.info(f"Progress: {completed_count}/{total_files} files processed ({file_count} stored, {emb_count} with embeddings, {skipped_count} skipped)")
                 except Exception:
                     logger.exception("A per-file task failed")
 
