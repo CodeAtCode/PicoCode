@@ -106,7 +106,13 @@ class SmartChunker:
             return []
     
     def _split_python(self, text: str) -> List[Tuple[str, str]]:
-        """Split Python code into classes and functions."""
+        """
+        Split Python code into classes and functions.
+        
+        Uses indentation-based parsing. Works well for most Python code
+        but may have edge cases with complex indentation patterns.
+        Falls back to simple chunking if parsing fails.
+        """
         units = []
         lines = text.split("\n")
         current_unit = []
@@ -154,11 +160,19 @@ class SmartChunker:
         return units
     
     def _split_javascript(self, text: str) -> List[Tuple[str, str]]:
-        """Split JavaScript/TypeScript code into functions and classes."""
+        """
+        Split JavaScript/TypeScript code into functions and classes.
+        
+        Uses regex patterns to match function and class declarations.
+        Works well for standard code patterns but may not handle all
+        edge cases with nested structures. Falls back to brace-based
+        splitting if regex matching doesn't find units.
+        """
         units = []
         
         # Regex patterns for JS/TS
         # Match function declarations, arrow functions, class declarations
+        # Note: Non-greedy matching, works for most cases but not perfect for deeply nested code
         patterns = [
             r'((?:export\s+)?(?:async\s+)?function\s+\w+\s*\([^)]*\)\s*{[\s\S]*?})',
             r'((?:export\s+)?const\s+\w+\s*=\s*(?:async\s*)?\([^)]*\)\s*=>\s*{[\s\S]*?})',
@@ -209,6 +223,11 @@ class SmartChunker:
         """
         Generic brace-based splitting for C-style languages.
         Finds balanced brace blocks.
+        
+        Note: This is a simple heuristic that doesn't handle braces
+        inside strings, comments, or template literals. It works well
+        for most code but may produce imperfect results in edge cases.
+        The chunker will still fall back to simple chunking if needed.
         """
         units = []
         lines = text.split("\n")
@@ -219,7 +238,8 @@ class SmartChunker:
         for line in lines:
             current_unit.append(line)
             
-            # Count braces (simple heuristic, doesn't handle strings/comments perfectly)
+            # Count braces (simple heuristic)
+            # Note: Doesn't handle strings/comments perfectly, but works well in practice
             brace_count += line.count("{") - line.count("}")
             
             if "{" in line and not in_block:

@@ -324,10 +324,11 @@ def _process_file_sync(
         if isinstance(cfg, dict):
             embedding_model = cfg.get("embedding_model")
 
-        # Use smart chunking for code files, fallback to simple for others
+        # Use smart chunking for supported code languages
         use_smart_chunking = cfg.get("smart_chunking", True) if isinstance(cfg, dict) else True
+        supported_languages = ["python", "javascript", "typescript", "java", "go", "rust", "c", "cpp"]
         
-        if use_smart_chunking and lang != "text":
+        if use_smart_chunking and lang in supported_languages:
             chunks = smart_chunk(content, language=lang, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
         else:
             chunks = chunk_text(content, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)

@@ -85,9 +85,9 @@ class SearchService:
     
     @staticmethod
     def _make_cache_key(project_id: str, query: str, top_k: int) -> str:
-        """Generate cache key for search query."""
+        """Generate cache key for search query using SHA-256."""
         key_str = f"{project_id}:{query}:{top_k}"
-        key_hash = hashlib.md5(key_str.encode()).hexdigest()
+        key_hash = hashlib.sha256(key_str.encode()).hexdigest()[:16]  # Use first 16 chars
         return f"search:{key_hash}"
     
     @staticmethod
