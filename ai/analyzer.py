@@ -333,6 +333,8 @@ def _process_file_sync(
     rel_path: str,
     cfg: Optional[Dict[str, Any]],
     incremental: bool = True,
+    processed_count: Optional[list] = None,
+    total_files: int = 0,
 ):
     """
     Synchronous implementation of per-file processing.
@@ -364,8 +366,12 @@ def _process_file_sync(
             logger.debug(f"Skipping unchanged file: {rel_path}")
             return {"stored": False, "embedded": False, "skipped": True}
 
-        # Log file processing
-        logger.info(f"Processing file: {rel_path}")
+        # Log file processing with progress
+        if processed_count is not None and total_files > 0:
+            current = len(processed_count)
+            logger.info(f"Processing file ({current}/{total_files}): {rel_path}")
+        else:
+            logger.info(f"Processing file: {rel_path}")
 
         # store file (synchronous DB writer) with metadata
         try:
@@ -409,8 +415,13 @@ def _process_file_sync(
             chunk_tasks.append((idx, chunk_doc))
 
         # Process embeddings in parallel batches for better throughput
-        for batch_start in range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE):
+        num_batches = (len(chunk_tasks) + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
+        for batch_num, batch_start in enumerate(range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE), 1):
             batch = chunk_tasks[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
+            
+            # Log batch processing start
+            logger.info(f"Generating embeddings for {rel_path}: batch {batch_num}/{num_batches} ({len(batch)} chunks)")
+            
             embedding_futures = []
             
             for idx, chunk_doc in batch:
@@ -424,6 +435,7 @@ def _process_file_sync(
                     raise
 
             # Wait for batch to complete and store results
+            saved_count = 0
             for idx, chunk_doc, future in embedding_futures:
                 try:
                     emb = future.result()  # This will re-raise any exception from the worker
@@ -439,6 +451,7 @@ def _process_file_sync(
                         try:
                             _load_sqlite_vector_extension(conn2)
                             _insert_chunk_vector_with_retry(conn2, fid, rel_path, idx, emb)
+                            saved_count += 1
                         finally:
                             conn2.close()
                         embedded_any = True
@@ -454,6 +467,9 @@ def _process_file_sync(
                         print(err_content)
                     except Exception:
                         logger.exception("Failed to write empty-embedding error to disk for %s chunk %d", rel_path, idx)
+            
+            # Log batch completion
+            logger.info(f"Saved {saved_count}/{len(batch)} embeddings for {rel_path} batch {batch_num}/{num_batches}")
 
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
@@ -514,7 +530,12 @@ def analyze_local_path_sync(
                     continue
                 file_paths.append({"full": full, "rel": rel})
         
-        logger.info(f"Found {len(file_paths)} files to process")
+        total_files = len(file_paths)
+        logger.info(f"Found {total_files} files to process")
+        
+        # Thread-safe counter for progress tracking
+        processed_count = []
+        processed_lock = threading.Lock()
 
         # Process files in chunks to avoid too many futures at once.
         CHUNK_SUBMIT = 256
@@ -530,12 +551,16 @@ def analyze_local_path_sync(
                     f["rel"],
                     cfg,
                     incremental,
+                    processed_count,
+                    total_files,
                 )
                 futures.append(fut)
 
             for fut in concurrent.futures.as_completed(futures):
                 try:
                     r = fut.result()
+                    with processed_lock:
+                        processed_count.append(1)
                     if isinstance(r, dict):
                         if r.get("stored"):
                             file_count += 1
@@ -543,6 +568,11 @@ def analyze_local_path_sync(
                             emb_count += 1
                         if r.get("skipped"):
                             skipped_count += 1
+                        
+                        # Log periodic progress updates (every 10 files)
+                        current_processed = len(processed_count)
+                        if current_processed % 10 == 0:
+                            logger.info(f"Progress: {current_processed}/{total_files} files processed ({file_count} stored, {emb_count} with embeddings, {skipped_count} skipped)")
                 except Exception:
                     logger.exception("A per-file task failed")
 
