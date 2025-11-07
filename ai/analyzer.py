@@ -255,14 +255,48 @@ def _search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) -
 
 
 def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optional[str]:
+    """
+    Get chunk text by reading from filesystem instead of database.
+    Uses project_path metadata and file path to read the actual file.
+    """
+    from db.operations import get_project_metadata
+    
     conn = _connect_db(database_path)
     try:
         cur = conn.cursor()
-        cur.execute("SELECT content FROM files WHERE id = ?", (file_id,))
+        # Get file path from database
+        cur.execute("SELECT path FROM files WHERE id = ?", (file_id,))
         row = cur.fetchone()
         if not row:
+            logger.warning(f"File not found in database: file_id={file_id}")
             return None
-        content = row[0] or ""
+        
+        file_path = row[0]
+        if not file_path:
+            logger.warning(f"File path is empty for file_id={file_id}")
+            return None
+        
+        # Get project path from metadata
+        project_path = get_project_metadata(database_path, "project_path")
+        if not project_path:
+            logger.error("Project path not found in metadata, cannot read file from filesystem")
+            return None
+        
+        # Construct full file path
+        full_path = os.path.join(project_path, file_path)
+        
+        # Read file content from filesystem
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
+                content = fh.read()
+        except Exception as e:
+            logger.warning(f"Failed to read file from filesystem: {full_path}, error: {e}")
+            return None
+        
+        if not content:
+            return None
+        
+        # Extract the chunk
         if CHUNK_SIZE <= 0:
             return content
         step = max(1, CHUNK_SIZE - CHUNK_OVERLAP)
@@ -309,7 +343,11 @@ def _process_file_sync(
         
         # Check if file needs reindexing (incremental mode)
         if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
+            logger.debug(f"Skipping unchanged file: {rel_path}")
             return {"stored": False, "embedded": False, "skipped": True}
+
+        # Log file processing
+        logger.info(f"Processing file: {rel_path}")
 
         # store file (synchronous DB writer) with metadata
         try:
@@ -426,8 +464,17 @@ def analyze_local_path_sync(
     Submits per-file tasks to a shared ThreadPoolExecutor.
     Supports incremental indexing to skip unchanged files.
     """
+    from db.operations import set_project_metadata
+    
     semaphore = threading.Semaphore(EMBEDDING_CONCURRENCY)
     start_time = time.time()
+    
+    # Store project path in metadata for filesystem access
+    try:
+        set_project_metadata(database_path, "project_path", local_path)
+        logger.info(f"Starting indexing for project at: {local_path}")
+    except Exception as e:
+        logger.warning(f"Failed to store project path in metadata: {e}")
     
     try:
         file_count = 0
@@ -436,6 +483,7 @@ def analyze_local_path_sync(
         file_paths: List[Dict[str, str]] = []
 
         # Collect files to process
+        logger.info("Collecting files to index...")
         for root, dirs, files in os.walk(local_path):
             for fname in files:
                 full = os.path.join(root, fname)
@@ -447,6 +495,8 @@ def analyze_local_path_sync(
                 except Exception:
                     continue
                 file_paths.append({"full": full, "rel": rel})
+        
+        logger.info(f"Found {len(file_paths)} files to process")
 
         # Process files in chunks to avoid too many futures at once.
         CHUNK_SUBMIT = 256
@@ -481,6 +531,9 @@ def analyze_local_path_sync(
         # Store indexing metadata
         end_time = time.time()
         duration = end_time - start_time
+        
+        # Log summary
+        logger.info(f"Indexing completed: {file_count} files processed, {emb_count} embeddings created, {skipped_count} files skipped in {duration:.2f}s")
         
         try:
             # Use batch update for efficiency - single database transaction

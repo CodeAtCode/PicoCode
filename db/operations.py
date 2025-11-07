@@ -233,21 +233,22 @@ def store_file(database_path, path, content, language, last_modified=None, file_
     Insert or update a file record into the DB using a queued single-writer to avoid
     sqlite 'database is locked' errors in multithreaded scenarios.
     Supports incremental indexing with last_modified and file_hash tracking.
+    Note: Does not store full file content in database (only snippet), content is read from filesystem when needed.
     Returns lastrowid (same as the previous store_file implementation).
     """
     snippet = (content[:512] if content else "")
     sql = """
         INSERT INTO files (path, content, language, snippet, last_modified, file_hash, updated_at) 
-        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        VALUES (?, NULL, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(path) DO UPDATE SET 
-            content=excluded.content,
+            content=NULL,
             language=excluded.language,
             snippet=excluded.snippet,
             last_modified=excluded.last_modified,
             file_hash=excluded.file_hash,
             updated_at=datetime('now')
     """
-    params = (path, content, language, snippet, last_modified, file_hash)
+    params = (path, language, snippet, last_modified, file_hash)
 
     writer = _get_writer(database_path)
     # We wait for the background writer to complete the insert and then return the row id.
