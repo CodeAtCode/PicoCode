@@ -10,7 +10,7 @@ from typing import Optional
 from datetime import datetime
 
 from db import init_db, get_project_stats
-from analyzer import analyze_local_path_background, search_semantic, call_coding_model
+from analyzer import analyze_local_path_background, call_coding_model
 from config import CFG
 from projects import (
     get_project_by_id, list_projects,
@@ -22,6 +22,7 @@ from models import (
 )
 from logger import get_logger
 from rate_limiter import query_limiter, indexing_limiter, general_limiter
+from services import ProjectService, SearchService
 
 logger = get_logger(__name__)
 
@@ -259,25 +260,18 @@ def api_query(http_request: Request, request: QueryRequest):
         )
     
     try:
-        project = get_project_by_id(request.project_id)
-        if not project:
-            return JSONResponse({"error": "Project not found"}, status_code=404)
-        
-        db_path = project["database_path"]
-        
-        # Check if project has been indexed
-        stats = get_project_stats(db_path)
-        if stats["file_count"] == 0:
-            return JSONResponse({"error": "Project not indexed yet"}, status_code=400)
-        
-        # Perform semantic search
-        results = search_semantic(request.query, db_path, top_k=request.top_k)
-        
-        return JSONResponse({
-            "results": results,
-            "project_id": request.project_id,
-            "query": request.query
-        })
+        # Use SearchService for better separation of concerns
+        result = SearchService.semantic_search(
+            project_id=request.project_id,
+            query=request.query,
+            top_k=request.top_k,
+            use_cache=True
+        )
+        return JSONResponse(result)
+    except ValueError as e:
+        # ValueError for not found or not indexed
+        logger.warning(f"Query validation failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         logger.exception(f"Error querying project: {e}")
         return JSONResponse({"error": "Query failed"}, status_code=500)
