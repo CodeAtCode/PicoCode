@@ -33,17 +33,26 @@ def api_health():
     - **status**: "ok" if service is running
     - **version**: API version
     - **features**: List of enabled features
+    - **file_watcher**: Status of the FileWatcher (if enabled)
     
     Use this endpoint for:
     - Load balancer health checks
     - Monitoring systems
     - Service availability verification
     """
-    return JSONResponse({
+    from main import _file_watcher
+    
+    health_data = {
         "status": "ok",
         "version": "0.2.0",
-        "features": ["rag", "per-project-db", "pycharm-api", "incremental-indexing", "rate-limiting", "caching"]
-    })
+        "features": ["rag", "per-project-db", "pycharm-api", "incremental-indexing", "rate-limiting", "caching", "file-watcher"]
+    }
+    
+    # Add file watcher status if available
+    if _file_watcher:
+        health_data["file_watcher"] = _file_watcher.get_status()
+    
+    return JSONResponse(health_data)
 
 
 @router.get("/", response_class=HTMLResponse)

@@ -45,6 +45,15 @@ def api_create_project(request: CreateProjectRequest):
     """
     try:
         project = get_or_create_project(request.path, request.name)
+        
+        # Add project to file watcher if available
+        try:
+            from main import _file_watcher
+            if _file_watcher and _file_watcher.is_running():
+                _file_watcher.add_project(project["id"], project["path"])
+        except Exception as e:
+            logger.warning(f"Could not add project to file watcher: {e}")
+        
         return JSONResponse(project)
     except ValueError as e:
         # ValueError is expected for invalid inputs, safe to show message
