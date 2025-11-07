@@ -8,15 +8,12 @@ from contextlib import asynccontextmanager
 import os
 import uvicorn
 
-from db import operations as db_operations
 from db.operations import get_or_create_project
 from utils.config import CFG
 from utils.logger import get_logger
-from utils import app_state
 from endpoints.project_endpoints import router as project_router
 from endpoints.query_endpoints import router as query_router
 from endpoints.web_endpoints import router as web_router
-from utils.file_watcher import FileWatcher
 
 logger = get_logger(__name__)
 
@@ -34,43 +31,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Could not create default project: {e}")
     
-    # Start FileWatcher if enabled
-    if CFG.get("file_watcher_enabled", True):
-        try:
-            watcher = FileWatcher(
-                logger=logger,
-                enabled=True,
-                debounce_seconds=CFG.get("file_watcher_debounce", 5),
-                check_interval=CFG.get("file_watcher_interval", 10)
-            )
-            
-            # Add all existing projects to the watcher
-            try:
-                projects = db_operations.list_projects()
-                for project in projects:
-                    if project.get("path") and os.path.exists(project["path"]):
-                        watcher.add_project(project["id"], project["path"])
-            except Exception as e:
-                logger.warning(f"Could not add projects to file watcher: {e}")
-            
-            watcher.start()
-            app_state.set_file_watcher(watcher)
-            logger.info("FileWatcher started successfully")
-        except Exception as e:
-            logger.error(f"Failed to start FileWatcher: {e}")
-    else:
-        logger.info("FileWatcher is disabled in configuration")
-    
     yield
-    
-    # Stop FileWatcher on shutdown
-    shutdown_watcher = app_state.get_file_watcher()
-    if shutdown_watcher:
-        try:
-            shutdown_watcher.stop()
-            logger.info("FileWatcher stopped successfully")
-        except Exception as e:
-            logger.error(f"Error stopping FileWatcher: {e}")
 
 
 app = FastAPI(
