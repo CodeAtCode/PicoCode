@@ -15,6 +15,7 @@ from db import store_file, needs_reindex, set_project_metadata_batch, get_projec
 from external_api import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
 from logger import get_logger
+from smart_chunker import smart_chunk
 import logging
 
 # reduce noise from httpx used by external libs
@@ -323,7 +324,14 @@ def _process_file_sync(
         if isinstance(cfg, dict):
             embedding_model = cfg.get("embedding_model")
 
-        chunks = chunk_text(content, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        # Use smart chunking for code files, fallback to simple for others
+        use_smart_chunking = cfg.get("smart_chunking", True) if isinstance(cfg, dict) else True
+        
+        if use_smart_chunking and lang != "text":
+            chunks = smart_chunk(content, language=lang, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        else:
+            chunks = chunk_text(content, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        
         if not chunks:
             chunks = [content]
 
