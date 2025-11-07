@@ -8,7 +8,7 @@ the web UI displays accurate and up-to-date information.
 
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Callable
 import os
 
@@ -230,7 +230,7 @@ class IndexSyncAgent:
             
             metadata = {}
             if actual_status == "ready":
-                metadata["last_indexed_at"] = datetime.utcnow().isoformat()
+                metadata["last_indexed_at"] = datetime.now(timezone.utc).isoformat()
             
             self._update_project_status(
                 project_id,

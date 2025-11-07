@@ -139,6 +139,9 @@ class TestIndexSyncAgent(unittest.TestCase):
         """Test reconciliation of fully indexed project."""
         db_path = os.path.join(self.temp_dir, "indexed.db")
         
+        # Create a dummy database file so it "exists"
+        open(db_path, 'w').close()
+        
         self.mock_db.projects = [{
             "id": "test456",
             "path": self.temp_dir,
