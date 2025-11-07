@@ -5,6 +5,7 @@ import traceback
 import sqlite3
 import importlib.resources
 import hashlib
+import math
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -44,6 +45,7 @@ CHUNK_OVERLAP = 100      # overlapping characters between chunks
 EMBEDDING_CONCURRENCY = 4
 # Increase batch size for parallel processing
 EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
+PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
 _THREADPOOL_WORKERS = max(16, EMBEDDING_CONCURRENCY + 8)
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_THREADPOOL_WORKERS)
 
@@ -418,7 +420,7 @@ def _process_file_sync(
             chunk_tasks.append((idx, chunk_doc))
 
         # Process embeddings in parallel batches for better throughput
-        num_batches = (len(chunk_tasks) + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
+        num_batches = math.ceil(len(chunk_tasks) / EMBEDDING_BATCH_SIZE)
         for batch_num, batch_start in enumerate(range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE), 1):
             batch = chunk_tasks[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
             
@@ -571,7 +573,7 @@ def analyze_local_path_sync(
                     with counters[2]:
                         counters[1] += 1
                         completed_count = counters[1]
-                        should_log = completed_count % 10 == 0
+                        should_log = completed_count % PROGRESS_LOG_INTERVAL == 0
                     
                     if isinstance(r, dict):
                         if r.get("stored"):
