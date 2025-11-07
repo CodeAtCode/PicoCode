@@ -258,6 +258,9 @@ def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optio
     """
     Get chunk text by reading from filesystem instead of database.
     Uses project_path metadata and file path to read the actual file.
+    
+    Security: Validates that the resolved file path is within the project directory
+    to prevent path traversal attacks.
     """
     from db.operations import get_project_metadata
     
@@ -280,14 +283,20 @@ def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optio
         project_path = get_project_metadata(database_path, "project_path")
         if not project_path:
             logger.error("Project path not found in metadata, cannot read file from filesystem")
-            return None
+            raise RuntimeError("Project path metadata is missing - indexing may not have completed properly")
         
-        # Construct full file path
-        full_path = os.path.join(project_path, file_path)
+        # Construct full file path and normalize to prevent path traversal
+        full_path = os.path.normpath(os.path.join(project_path, file_path))
+        normalized_project_path = os.path.normpath(project_path)
+        
+        # Security check: ensure the resolved path is within the project directory
+        if not full_path.startswith(normalized_project_path + os.sep) and full_path != normalized_project_path:
+            logger.error(f"Path traversal attempt detected: {file_path} resolves outside project directory")
+            return None
         
         # Read file content from filesystem
         try:
-            with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
+            with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
                 content = fh.read()
         except Exception as e:
             logger.warning(f"Failed to read file from filesystem: {full_path}, error: {e}")
