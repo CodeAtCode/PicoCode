@@ -64,10 +64,10 @@ async def lifespan(app: FastAPI):
     yield
     
     # Stop FileWatcher on shutdown
-    watcher = app_state.get_file_watcher()
-    if watcher:
+    shutdown_watcher = app_state.get_file_watcher()
+    if shutdown_watcher:
         try:
-            watcher.stop()
+            shutdown_watcher.stop()
             logger.info("FileWatcher stopped successfully")
         except Exception as e:
             logger.error(f"Error stopping FileWatcher: {e}")

@@ -201,7 +201,8 @@ class FileWatcher:
         Set a callback to be called when changes are detected.
         
         Args:
-            callback: Function(project_id, changed_files) to call on changes
+            callback: Function(project_id: str, changed_files: List[str]) to call on changes.
+                     changed_files is a list of relative file paths that changed.
         """
         self._on_change_callback = callback
     
@@ -316,11 +317,12 @@ class FileWatcher:
                     
                     try:
                         # Use both modification time and file size as signature
+                        # Format: "mtime|size" (using pipe as separator to avoid conflicts)
                         stat = os.stat(filepath)
                         mtime = stat.st_mtime
                         size = stat.st_size
                         relative_path = os.path.relpath(filepath, directory)
-                        file_hashes[relative_path] = f"{mtime}:{size}"
+                        file_hashes[relative_path] = f"{mtime}|{size}"
                     except (OSError, ValueError):
                         # Skip files we can't access
                         continue
