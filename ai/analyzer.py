@@ -258,14 +258,6 @@ def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optio
     """
     Get chunk text by reading from filesystem instead of database.
     Uses project_path metadata and file path to read the actual file.
-    
-    Security: Validates that the resolved file path is within the project directory
-    to prevent path traversal attacks using os.path.commonpath for cross-platform safety.
-    
-    Note: Uses errors='replace' when reading files to handle invalid UTF-8 sequences
-    by replacing them with the Unicode replacement character (U+FFFD) rather than
-    dropping them silently. This preserves the file structure and makes encoding
-    issues visible.
     """
     conn = _connect_db(database_path)
     try:
@@ -293,27 +285,19 @@ def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optio
         normalized_project_path = os.path.abspath(project_path)
         
         # Security check: ensure the resolved path is within the project directory
-        # Using os.path.commonpath to find the longest common path.
-        # If the common path equals the project path, and the full path starts with
-        # the project path (or is the project path itself), then it's safe.
         try:
             common = os.path.commonpath([full_path, normalized_project_path])
-            # Verify the common path is the project path (file is within project)
             if common != normalized_project_path:
                 logger.error(f"Path traversal attempt detected: {file_path} resolves outside project directory")
                 return None
-            # Additional check: ensure full_path actually starts with project path
-            # (covers edge cases where paths might be equal)
             if full_path != normalized_project_path and not full_path.startswith(normalized_project_path + os.sep):
                 logger.error(f"Path traversal attempt detected: {file_path} does not start with project directory")
                 return None
         except ValueError:
-            # Different drives on Windows or incompatible paths
             logger.error(f"Path traversal attempt detected: {file_path} is on a different drive or incompatible path")
             return None
         
         # Read file content from filesystem
-        # Using errors='replace' to preserve file structure and make encoding issues visible
         try:
             with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
                 content = fh.read()
