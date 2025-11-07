@@ -3,12 +3,13 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 from functools import lru_cache
 
-from config import CFG  # config (keeps chunk_size etc if needed)
+from utils.config import CFG  # config (keeps chunk_size etc if needed)
 import atexit
 import threading
 import queue
-from logger import get_logger
+from utils.logger import get_logger
 from cache import project_cache, stats_cache, file_cache
+from .db_task import _DBTask
 
 _LOG = get_logger(__name__)
 
@@ -20,13 +21,6 @@ _PREPARED_LOCK = threading.Lock()
 _WRITERS = {}
 _WRITERS_LOCK = threading.Lock()
 
-class _DBTask:
-    def __init__(self, sql, params):
-        self.sql = sql
-        self.params = params
-        self.event = threading.Event()
-        self.rowid = None
-        self.exception = None
 
 class DBWriter:
     def __init__(self, database_path, timeout_seconds=30):

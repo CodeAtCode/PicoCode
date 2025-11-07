@@ -14,7 +14,7 @@ import threading
 from db import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
 from external_api import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
-from logger import get_logger
+from utils.logger import get_logger
 from smart_chunker import smart_chunk
 import logging
 
@@ -578,18 +578,7 @@ def llama_index_retrieve_documents(query: str, database_path: str, top_k: int = 
     """
     Return llama_index.core.Document objects for the top_k matching chunks using sqlite-vector.
     """
-    q_emb = get_embedding_for_text(query)
-    if not q_emb:
-        return []
-
-    rows = _search_vectors(database_path, q_emb, top_k=top_k)
-    docs: List[Document] = []
-    for r in rows:
-        fid = r.get("file_id")
-        path = r.get("path")
-        chunk_idx = r.get("chunk_index", 0)
-        score = r.get("score", 0.0)
-        chunk_text = _get_chunk_text(database_path, fid, chunk_idx) or ""
-        doc = Document(text=chunk_text, extra_info={"path": path, "file_id": fid, "chunk_index": chunk_idx, "score": score})
-        docs.append(doc)
-    return docs
+    from .llama_integration import llama_index_retrieve_documents as _llama_retrieve
+    return _llama_retrieve(query, database_path, top_k, 
+                          search_func=_search_vectors, 
+                          get_chunk_func=_get_chunk_text)

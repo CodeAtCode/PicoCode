@@ -16,7 +16,7 @@ from db import (
     get_or_create_project as db_get_or_create_project,
     get_project_stats,
 )
-from logger import get_logger
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

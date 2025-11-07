@@ -4,7 +4,7 @@ import time
 import threading
 from openai import OpenAI
 
-from config import CFG
+from utils.config import CFG
 
 # Instantiate client exactly as you requested, reading the key from the standard env var.
 _client = OpenAI(api_key=CFG.get("api_key"), base_url=CFG.get("api_url"),)

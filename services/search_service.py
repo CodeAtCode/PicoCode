@@ -4,10 +4,10 @@ Handles semantic search and query processing.
 """
 from typing import Dict, Any, List, Optional
 
-from analyzer import search_semantic
+from ai.analyzer import search_semantic
 from db import get_project_by_id, get_project_stats
 from cache import search_cache
-from logger import get_logger
+from utils.logger import get_logger
 import hashlib
 
 logger = get_logger(__name__)
