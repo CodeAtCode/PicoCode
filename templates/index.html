@@ -72,10 +72,7 @@
                       </small>
                     </div>
                     <div>
-                      <form action="/projects/{{ p.id }}" method="post" style="display:inline;" onsubmit="return confirm('Delete this project and its database?');">
-                        <input type="hidden" name="_method" value="DELETE">
-                        <button type="submit" class="btn btn-sm btn-outline-danger">×</button>
-                      </form>
+                      <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="{{ p.id }}" title="Delete project">×</button>
                     </div>
                   </li>
                 {% endfor %}
@@ -315,6 +312,33 @@
         console.error("Error polling status:", err);
       }
     }, 3000);
+
+    // Handle project deletion
+    document.addEventListener('click', async (e) => {
+      if (e.target.classList.contains('delete-project-btn')) {
+        const projectId = e.target.getAttribute('data-project-id');
+        
+        if (!confirm('Delete this project and its database?')) {
+          return;
+        }
+        
+        try {
+          const response = await fetch(`/projects/${projectId}`, {
+            method: 'DELETE'
+          });
+          
+          if (response.ok) {
+            // Reload page to show updated project list
+            window.location.reload();
+          } else {
+            const data = await response.json();
+            alert(`Failed to delete project: ${data.error || 'Unknown error'}`);
+          }
+        } catch (err) {
+          alert(`Error deleting project: ${err.message}`);
+        }
+      }
+    });
 
     // Initial render
     renderChat();
