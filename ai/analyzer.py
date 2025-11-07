@@ -333,13 +333,16 @@ def _process_file_sync(
     rel_path: str,
     cfg: Optional[Dict[str, Any]],
     incremental: bool = True,
-    processed_count: Optional[list] = None,
+    processed_count: Optional[list] = None,  # [counter: int, lock: threading.Lock]
     total_files: int = 0,
 ):
     """
     Synchronous implementation of per-file processing.
     Intended to run on a ThreadPoolExecutor worker thread.
     Returns a dict: {"stored": bool, "embedded": bool, "skipped": bool}
+    
+    Args:
+        processed_count: Thread-safe counter as [count, lock] for progress tracking
     """
     try:
         # read file content
@@ -368,8 +371,10 @@ def _process_file_sync(
 
         # Log file processing with progress
         if processed_count is not None and total_files > 0:
-            current = len(processed_count)
-            logger.info(f"Processing file ({current}/{total_files}): {rel_path}")
+            # processed_count is [counter, lock] tuple for thread-safety
+            with processed_count[1]:
+                current = processed_count[0]
+                logger.info(f"Processing file ({current}/{total_files}): {rel_path}")
         else:
             logger.info(f"Processing file: {rel_path}")
 
@@ -533,9 +538,8 @@ def analyze_local_path_sync(
         total_files = len(file_paths)
         logger.info(f"Found {total_files} files to process")
         
-        # Thread-safe counter for progress tracking
-        processed_count = []
-        processed_lock = threading.Lock()
+        # Thread-safe counter for progress tracking: [count, lock]
+        processed_count = [0, threading.Lock()]
 
         # Process files in chunks to avoid too many futures at once.
         CHUNK_SUBMIT = 256
@@ -559,8 +563,10 @@ def analyze_local_path_sync(
             for fut in concurrent.futures.as_completed(futures):
                 try:
                     r = fut.result()
-                    with processed_lock:
-                        processed_count.append(1)
+                    with processed_count[1]:
+                        processed_count[0] += 1
+                        current_processed = processed_count[0]
+                    
                     if isinstance(r, dict):
                         if r.get("stored"):
                             file_count += 1
@@ -570,7 +576,6 @@ def analyze_local_path_sync(
                             skipped_count += 1
                         
                         # Log periodic progress updates (every 10 files)
-                        current_processed = len(processed_count)
                         if current_processed % 10 == 0:
                             logger.info(f"Progress: {current_processed}/{total_files} files processed ({file_count} stored, {emb_count} with embeddings, {skipped_count} skipped)")
                 except Exception:
