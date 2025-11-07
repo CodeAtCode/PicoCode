@@ -270,8 +270,15 @@ def api_query(http_request: Request, request: QueryRequest):
         return JSONResponse(result)
     except ValueError as e:
         # ValueError for not found or not indexed
+        # Log the full error but return generic message
         logger.warning(f"Query validation failed: {e}")
-        return JSONResponse({"error": str(e)}, status_code=400)
+        # Return safe, generic error messages
+        if "not found" in str(e).lower():
+            return JSONResponse({"error": "Project not found"}, status_code=404)
+        elif "not indexed" in str(e).lower():
+            return JSONResponse({"error": "Project not indexed yet"}, status_code=400)
+        else:
+            return JSONResponse({"error": "Invalid request"}, status_code=400)
     except Exception as e:
         logger.exception(f"Error querying project: {e}")
         return JSONResponse({"error": "Query failed"}, status_code=500)
