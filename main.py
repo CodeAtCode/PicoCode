@@ -8,19 +8,26 @@ from contextlib import asynccontextmanager
 import os
 import uvicorn
 
+from db import operations as db_operations
 from db.operations import get_or_create_project
 from utils.config import CFG
 from utils.logger import get_logger
 from endpoints.project_endpoints import router as project_router
 from endpoints.query_endpoints import router as query_router
 from endpoints.web_endpoints import router as web_router
+from utils.file_watcher import FileWatcher
 
 logger = get_logger(__name__)
+
+# Global FileWatcher instance
+_file_watcher = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    global _file_watcher
+    
     # Project registry is auto-initialized when needed via create_project
     
     # Auto-create default project from configured local_path if it exists
@@ -31,7 +38,42 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Could not create default project: {e}")
     
+    # Start FileWatcher if enabled
+    if CFG.get("file_watcher_enabled", True):
+        try:
+            _file_watcher = FileWatcher(
+                logger=logger,
+                enabled=True,
+                debounce_seconds=CFG.get("file_watcher_debounce", 5),
+                check_interval=CFG.get("file_watcher_interval", 10)
+            )
+            
+            # Add all existing projects to the watcher
+            try:
+                projects = db_operations.list_projects()
+                for project in projects:
+                    if project.get("path") and os.path.exists(project["path"]):
+                        _file_watcher.add_project(project["id"], project["path"])
+            except Exception as e:
+                logger.warning(f"Could not add projects to file watcher: {e}")
+            
+            _file_watcher.start()
+            logger.info("FileWatcher started successfully")
+        except Exception as e:
+            logger.error(f"Failed to start FileWatcher: {e}")
+            _file_watcher = None
+    else:
+        logger.info("FileWatcher is disabled in configuration")
+    
     yield
+    
+    # Stop FileWatcher on shutdown
+    if _file_watcher:
+        try:
+            _file_watcher.stop()
+            logger.info("FileWatcher stopped successfully")
+        except Exception as e:
+            logger.error(f"Error stopping FileWatcher: {e}")
 
 
 app = FastAPI(

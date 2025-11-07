@@ -45,6 +45,15 @@ def api_create_project(request: CreateProjectRequest):
     """
     try:
         project = get_or_create_project(request.path, request.name)
+        
+        # Add project to file watcher if available
+        try:
+            from main import _file_watcher
+            if _file_watcher and _file_watcher.is_running():
+                _file_watcher.add_project(project["id"], project["path"])
+        except Exception as e:
+            logger.warning(f"Could not add project to file watcher: {e}")
+        
         return JSONResponse(project)
     except ValueError as e:
         # ValueError is expected for invalid inputs, safe to show message
@@ -86,12 +95,38 @@ def api_get_project(project_id: str):
     
     - **project_id**: Unique project identifier
     
-    Returns project metadata or 404 if not found.
+    Returns project metadata including indexing status and statistics or 404 if not found.
     """
     try:
         project = get_project_by_id(project_id)
         if not project:
             return JSONResponse({"error": "Project not found"}, status_code=404)
+        
+        # Add indexing statistics if project has a database
+        db_path = project.get("database_path")
+        if db_path and os.path.exists(db_path):
+            try:
+                from db.operations import get_project_stats
+                stats = get_project_stats(db_path)
+                project["indexing_stats"] = {
+                    "file_count": stats.get("file_count", 0),
+                    "embedding_count": stats.get("embedding_count", 0),
+                    "is_indexed": stats.get("file_count", 0) > 0
+                }
+            except Exception as e:
+                logger.warning(f"Could not get stats for project {project_id}: {e}")
+                project["indexing_stats"] = {
+                    "file_count": 0,
+                    "embedding_count": 0,
+                    "is_indexed": False
+                }
+        else:
+            project["indexing_stats"] = {
+                "file_count": 0,
+                "embedding_count": 0,
+                "is_indexed": False
+            }
+        
         return JSONResponse(project)
     except Exception as e:
         logger.exception(f"Error getting project: {e}")
