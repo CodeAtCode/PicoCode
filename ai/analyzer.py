@@ -71,6 +71,8 @@ def detect_language(path: str):
         return "text"
     if "_virtualenv.py" in path:
         return "text"
+    if "activate_this.py" in path:
+        return "text"
     ext = Path(path).suffix.lower()
     return EXT_LANG.get(ext, "text")
 
