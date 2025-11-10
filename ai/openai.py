@@ -21,16 +21,6 @@ DEFAULT_CODING_MODEL = CFG.get("coding_model")
 # Embedding client logger
 _embedding_logger = logging.getLogger("ai.analyzer.embedding")
 
-# Embedding client configuration (uses CFG values, can override specific ones via environment)
-DEFAULT_TIMEOUT = float(os.getenv("PICOCODE_EMBEDDING_TIMEOUT", "30"))  # seconds per request
-MAX_RETRIES = int(os.getenv("PICOCODE_EMBEDDING_RETRIES", "2"))
-BACKOFF_FACTOR = float(os.getenv("PICOCODE_EMBEDDING_BACKOFF", "1.5"))
-
-# Optionally enable requests debug logging by setting PICOCODE_HTTP_DEBUG=true
-if os.getenv("PICOCODE_HTTP_DEBUG", "").lower() in ("1", "true", "yes"):
-    logging.getLogger("requests").setLevel(logging.DEBUG)
-    logging.getLogger("urllib3").setLevel(logging.DEBUG)
-
 # Rate limiting configuration
 _RATE_LIMIT_CALLS = 100  # max calls per minute
 _RATE_LIMIT_WINDOW = 60.0  # seconds
@@ -132,9 +122,9 @@ class EmbeddingClient:
                  api_url: Optional[str] = None,
                  api_key: Optional[str] = None,
                  model: Optional[str] = None,
-                 timeout: float = DEFAULT_TIMEOUT,
-                 max_retries: int = MAX_RETRIES,
-                 backoff: float = BACKOFF_FACTOR):
+                 timeout: float = 30.0,
+                 max_retries: int = 2,
+                 backoff: float = 1.5):
         self.api_url = api_url or CFG.get("api_url")
         self.api_key = api_key or CFG.get("api_key")
         self.model = model or DEFAULT_EMBEDDING_MODEL or "text-embedding-3-small"
