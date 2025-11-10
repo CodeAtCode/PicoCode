@@ -18,7 +18,7 @@ from db.vector_operations import (
     search_vectors as _search_vectors,
     get_chunk_text as _get_chunk_text,
 )
-from .openai import get_embedding_for_text, call_coding_api
+from .openai import call_coding_api, EmbeddingClient
 from llama_index.core import Document
 from utils.logger import get_logger
 from utils import compute_file_hash, chunk_text, norm, cosine
@@ -59,15 +59,18 @@ _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_THREADPOOL_WORKER
 
 logger = get_logger(__name__)
 
+# Initialize EmbeddingClient for structured logging and retry logic
+_embedding_client = EmbeddingClient()
 
-def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, model: Optional[str] = None):
+
+def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, file_path: str = "<unknown>", chunk_index: int = 0, model: Optional[str] = None):
     """
     Wrapper to acquire semaphore inside executor task to avoid deadlock.
     The semaphore is acquired in the worker thread, not the main thread.
     """
     semaphore.acquire()
     try:
-        return get_embedding_for_text(text, model)
+        return _embedding_client.embed_text(text, file_path=file_path, chunk_index=chunk_index)
     finally:
         semaphore.release()
 
@@ -192,7 +195,7 @@ def _process_file_sync(
             for idx, chunk_doc in batch:
                 # Submit task to executor; semaphore will be acquired inside the worker
                 embedding_start_time = time.time()
-                future = _EXECUTOR.submit(_get_embedding_with_semaphore, semaphore, chunk_doc.text, embedding_model)
+                future = _EXECUTOR.submit(_get_embedding_with_semaphore, semaphore, chunk_doc.text, rel_path, idx, embedding_model)
                 embedding_futures.append((idx, chunk_doc, future, embedding_start_time))
 
             # Wait for batch to complete and store results
@@ -434,7 +437,7 @@ def search_semantic(query: str, database_path: str, top_k: int = 5):
     Uses sqlite-vector's vector_full_scan to retrieve best-matching chunks and returns
     a list of {file_id, path, chunk_index, score}.
     """
-    q_emb = get_embedding_for_text(query)
+    q_emb = _embedding_client.embed_text(query, file_path="<query>", chunk_index=0)
     if not q_emb:
         return []
 
