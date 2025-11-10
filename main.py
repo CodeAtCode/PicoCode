@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
+import sys
 import tempfile
 import uvicorn
 
@@ -53,7 +54,8 @@ async def lifespan(app: FastAPI):
                 pass
     except Exception as e:
         logger.error(f"FATAL: Failed to load sqlite-vector extension at startup: {e}")
-        raise RuntimeError(f"Cannot start application: sqlite-vector extension failed to load. {e}") from e
+        # Force immediate exit - cannot continue without vector extension
+        sys.exit(1)
     
     # Project registry is auto-initialized when needed via create_project
     
@@ -130,9 +132,11 @@ app.include_router(web_router)
 
 
 if __name__ == "__main__":
+    # Configure uvicorn to hide access logs
     uvicorn.run(
         "main:app", 
         host=CFG.get("uvicorn_host", "127.0.0.1"), 
         port=int(CFG.get("uvicorn_port", 8000)), 
-        reload=True
+        reload=True,
+        access_log=False  # Hide access logs
     )

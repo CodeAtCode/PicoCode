@@ -1,7 +1,7 @@
 """
 SQLite-vector database operations.
 All sqlite-vector extension operations are centralized here.
-The program will crash if the sqlite-vector extension fails to load (strict mode).
+The program will ALWAYS crash if the sqlite-vector extension fails to load (strict mode is mandatory).
 """
 import os
 import json
@@ -17,9 +17,6 @@ logger = get_logger(__name__)
 SQLITE_VECTOR_PKG = "sqlite_vector.binaries"
 SQLITE_VECTOR_RESOURCE = "vector"
 SQLITE_VECTOR_VERSION_FN = "vector_version"      # SELECT vector_version();
-
-# Strict behavior: fail fast if extension can't be loaded or calls fail
-STRICT_VECTOR_INTEGRATION = True
 
 # Retry policy for DB-locked operations
 DB_LOCK_RETRY_COUNT = 6
@@ -52,14 +49,14 @@ def load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:
     Loads sqlite-vector binary from the installed python package and performs a lightweight
     sanity check (calls vector_version() if available).
     
-    CRITICAL: This function will crash the program if the extension fails to load
-    when STRICT_VECTOR_INTEGRATION is True (which it always is).
+    CRITICAL: This function will ALWAYS crash the program if the extension fails to load.
+    STRICT mode is mandatory and cannot be disabled.
     
     Args:
         conn: SQLite database connection
         
     Raises:
-        RuntimeError: If the extension fails to load (STRICT mode enabled)
+        RuntimeError: If the extension fails to load
     """
     try:
         ext_path = importlib.resources.files(SQLITE_VECTOR_PKG) / SQLITE_VECTOR_RESOURCE
@@ -76,12 +73,9 @@ def load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:
             # version function may not be present; ignore
             pass
     except Exception as e:
-        if STRICT_VECTOR_INTEGRATION:
-            # CRASH THE PROGRAM: This is intentional as per requirements
-            logger.error(f"FATAL: Failed to load sqlite-vector extension: {e}")
-            raise RuntimeError(f"Failed to load sqlite-vector extension: {e}") from e
-        else:
-            logger.warning("sqlite-vector extension not loaded: %s", e)
+        # CRASH THE PROGRAM: This is intentional and mandatory
+        logger.error(f"FATAL: Failed to load sqlite-vector extension: {e}")
+        raise RuntimeError(f"Failed to load sqlite-vector extension: {e}") from e
 
 
 def ensure_chunks_and_meta(conn: sqlite3.Connection):
