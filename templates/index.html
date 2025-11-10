@@ -309,7 +309,7 @@
       } catch (err) {
         console.error("Error polling status:", err);
       }
-    }, 3000);
+    }, 10000); // Poll every 10 seconds to reduce server load
 
     // Handle project deletion
     document.addEventListener('click', async (e) => {
