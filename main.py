@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
+import tempfile
 import uvicorn
 
 from db import operations as db_operations
@@ -27,6 +28,32 @@ _file_watcher = None
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global _file_watcher
+    
+    # Test sqlite-vector extension loading at startup
+    logger.info("Testing sqlite-vector extension loading...")
+    try:
+        from db.vector_operations import connect_db, load_sqlite_vector_extension
+        
+        # Create a temporary database to test the extension
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+            tmp_db_path = tmp.name
+        
+        try:
+            conn = connect_db(tmp_db_path)
+            try:
+                load_sqlite_vector_extension(conn)
+                logger.info("✓ sqlite-vector extension loaded successfully")
+            finally:
+                conn.close()
+        finally:
+            # Clean up temporary database
+            try:
+                os.unlink(tmp_db_path)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error(f"FATAL: Failed to load sqlite-vector extension at startup: {e}")
+        raise RuntimeError(f"Cannot start application: sqlite-vector extension failed to load. {e}") from e
     
     # Project registry is auto-initialized when needed via create_project
     

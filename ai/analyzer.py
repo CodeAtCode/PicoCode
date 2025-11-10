@@ -422,19 +422,15 @@ def analyze_local_path_sync(
 
 def analyze_local_path_background(local_path: str, database_path: str, venv_path: Optional[str] = None, max_file_size: int = 200000, cfg: Optional[dict] = None):
     """
-    Non-blocking wrapper intended to be scheduled by FastAPI BackgroundTasks.
-    This function starts a daemon thread which runs the synchronous analyzer and returns immediately.
+    Wrapper intended to be scheduled by FastAPI BackgroundTasks.
+    This function runs the synchronous analyzer in the FastAPI background task.
     Usage from FastAPI endpoint:
         background_tasks.add_task(analyze_local_path_background, local_path, database_path, venv_path, max_file_size, cfg)
     """
-    def _worker():
-        try:
-            analyze_local_path_sync(local_path, database_path, venv_path=venv_path, max_file_size=max_file_size, cfg=cfg)
-        except Exception:
-            logger.exception("Background analysis worker failed for %s", local_path)
-
-    t = threading.Thread(target=_worker, name=f"analysis-worker-{os.path.basename(local_path)}", daemon=True)
-    t.start()
+    try:
+        analyze_local_path_sync(local_path, database_path, venv_path=venv_path, max_file_size=max_file_size, cfg=cfg)
+    except Exception:
+        logger.exception("Background analysis worker failed for %s", local_path)
 
 
 # Simple synchronous helpers preserved for compatibility --------------------------------
