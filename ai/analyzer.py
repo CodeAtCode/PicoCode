@@ -425,6 +425,7 @@ def _process_file_sync(
             batch = chunk_tasks[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
             
             # Log batch processing start
+            batch_start_time = time.time()
             logger.info(f"Generating embeddings for {rel_path}: batch {batch_num}/{num_batches} ({len(batch)} chunks)")
             
             embedding_futures = []
@@ -433,48 +434,65 @@ def _process_file_sync(
                 # Acquire semaphore to bound concurrent embedding requests
                 semaphore.acquire()
                 try:
+                    embedding_start_time = time.time()
                     future = _EXECUTOR.submit(get_embedding_for_text, chunk_doc.text, embedding_model)
-                    embedding_futures.append((idx, chunk_doc, future))
+                    embedding_futures.append((idx, chunk_doc, future, embedding_start_time))
                 except Exception:
                     semaphore.release()
                     raise
 
             # Wait for batch to complete and store results
             saved_count = 0
-            for idx, chunk_doc, future in embedding_futures:
+            failed_count = 0
+            for idx, chunk_doc, future, embedding_start_time in embedding_futures:
                 try:
                     emb = future.result()  # This will re-raise any exception from the worker
+                    embedding_duration = time.time() - embedding_start_time
+                    
+                    # Log slow embedding generation (> 5 seconds)
+                    if embedding_duration > 5.0:
+                        logger.warning(f"Slow embedding generation for {rel_path} chunk {idx}: {embedding_duration:.2f}s")
                 except Exception as e:
                     logger.exception("Embedding retrieval failed for %s chunk %d: %s", rel_path, idx, e)
                     emb = None
+                    failed_count += 1
                 finally:
                     semaphore.release()
 
                 if emb:
                     try:
+                        db_start_time = time.time()
                         conn2 = _connect_db(database_path)
                         try:
                             _load_sqlite_vector_extension(conn2)
                             _insert_chunk_vector_with_retry(conn2, fid, rel_path, idx, emb)
                             saved_count += 1
+                            db_duration = time.time() - db_start_time
+                            
+                            # Log slow database operations (> 2 seconds)
+                            if db_duration > 2.0:
+                                logger.warning(f"Slow database insert for {rel_path} chunk {idx}: {db_duration:.2f}s")
                         finally:
                             conn2.close()
                         embedded_any = True
                     except Exception as e:
+                        failed_count += 1
                         try:
                             err_content = f"Failed to insert chunk vector: {e}\n\nTraceback:\n{traceback.format_exc()}"
                             print(err_content)
                         except Exception:
                             logger.exception("Failed to write chunk-insert error to disk for %s chunk %d", rel_path, idx)
                 else:
+                    failed_count += 1
                     try:
                         err_content = "Embedding API returned no vector for chunk."
                         print(err_content)
                     except Exception:
                         logger.exception("Failed to write empty-embedding error to disk for %s chunk %d", rel_path, idx)
             
-            # Log batch completion
-            logger.info(f"Saved {saved_count}/{len(batch)} embeddings for {rel_path} batch {batch_num}/{num_batches}")
+            # Log batch completion with timing and status
+            batch_duration = time.time() - batch_start_time
+            logger.info(f"Completed batch {batch_num}/{num_batches} for {rel_path}: {saved_count} saved, {failed_count} failed, {batch_duration:.2f}s elapsed")
 
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
