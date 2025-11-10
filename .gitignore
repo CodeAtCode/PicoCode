@@ -6,3 +6,6 @@ uv.lock
 __pycache__
 # Per-project databases
 .picocode/
+# Gradle build artifacts
+ide-plugins/.gradle/
+ide-plugins/build/

@@ -17,5 +17,7 @@
                     icon="/icons/picocode.png"
                     anchor="right"
                     factoryClass="com.picocode.PicoCodeToolWindowFactory"/>
+        <statusBarWidgetFactory implementation="com.picocode.PicoCodeStatusBarWidgetFactory" 
+                                order="after memoryIndicator"/>
     </extensions>
 </idea-plugin>
