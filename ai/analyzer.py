@@ -52,6 +52,8 @@ EMBEDDING_CONCURRENCY = 4
 # Increase batch size for parallel processing
 EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
 PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
+EMBEDDING_TIMEOUT = 30  # Timeout in seconds for each embedding API call
+FILE_PROCESSING_TIMEOUT = 300  # Timeout in seconds for processing a single file (5 minutes)
 _THREADPOOL_WORKERS = max(16, EMBEDDING_CONCURRENCY + 8)
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_THREADPOOL_WORKERS)
 
@@ -216,12 +218,16 @@ def _process_file_sync(
                     if elapsed_before_result > 3.0:
                         logger.warning(f"Embedding API request taking too long for {rel_path} chunk {idx}: {elapsed_before_result:.2f}s elapsed, still waiting for response...")
                     
-                    emb = future.result()  # This will re-raise any exception from the worker
+                    emb = future.result(timeout=EMBEDDING_TIMEOUT)  # Add timeout to prevent hanging indefinitely
                     embedding_duration = time.time() - embedding_start_time
                     
                     # Log slow embedding generation (> 5 seconds)
                     if embedding_duration > 5.0:
                         logger.warning(f"Slow embedding API response for {rel_path} chunk {idx}: {embedding_duration:.2f}s total")
+                except concurrent.futures.TimeoutError:
+                    logger.error(f"Embedding API timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx}")
+                    emb = None
+                    failed_count += 1
                 except Exception as e:
                     logger.exception("Embedding retrieval failed for %s chunk %d: %s", rel_path, idx, e)
                     emb = None
@@ -355,7 +361,7 @@ def analyze_local_path_sync(
 
             for fut in concurrent.futures.as_completed(futures):
                 try:
-                    r = fut.result()
+                    r = fut.result(timeout=FILE_PROCESSING_TIMEOUT)
                     
                     # Increment completed counter and check for periodic logging
                     with counters[2]:
@@ -374,6 +380,10 @@ def analyze_local_path_sync(
                         # Log periodic progress updates (every 10 files)
                         if should_log:
                             logger.info(f"Progress: {completed_count}/{total_files} files processed ({file_count} stored, {emb_count} with embeddings, {skipped_count} skipped)")
+                except concurrent.futures.TimeoutError:
+                    logger.error(f"File processing timeout ({FILE_PROCESSING_TIMEOUT}s exceeded)")
+                    with counters[2]:
+                        counters[1] += 1
                 except Exception:
                     logger.exception("A per-file task failed")
 

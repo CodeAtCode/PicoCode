@@ -63,9 +63,16 @@ def _record_failure():
             _circuit_state["open_until"] = time.time() + _CIRCUIT_BREAKER_TIMEOUT
 
 def _retry_with_backoff(func, *args, **kwargs):
-    """Retry function with exponential backoff"""
+    """Retry function with exponential backoff on transient errors"""
     max_retries = 3
     base_delay = 1.0
+    
+    # Transient error indicators that should be retried
+    transient_error_keywords = [
+        'timeout', 'timed out', 'connection', 'network', 
+        'temporary', 'unavailable', 'rate limit', '429', 
+        '500', '502', '503', '504', 'overload'
+    ]
     
     for attempt in range(max_retries):
         try:
@@ -75,9 +82,20 @@ def _retry_with_backoff(func, *args, **kwargs):
             _record_success()
             return result
         except Exception as e:
+            error_str = str(e).lower()
+            is_transient = any(keyword in error_str for keyword in transient_error_keywords)
+            
+            # Always record failure for circuit breaker
             _record_failure()
+            
+            # Only retry on transient errors or if it's not the last attempt
             if attempt == max_retries - 1:
                 raise
+            
+            # If it's clearly not a transient error, don't retry
+            if not is_transient and attempt > 0:
+                raise
+            
             delay = base_delay * (2 ** attempt)
             time.sleep(delay)
 
