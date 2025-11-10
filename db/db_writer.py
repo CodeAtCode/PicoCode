@@ -25,6 +25,7 @@ class DBWriter:
         self._thread = threading.Thread(target=self._worker, daemon=True, name=f"DBWriter-{database_path}")
         self._timeout_seconds = timeout_seconds
         self._thread.start()
+        _LOG.info(f"DBWriter started for database: {database_path}")
 
     def _open_conn(self):
         conn = sqlite3.connect(self.database_path, timeout=self._timeout_seconds, check_same_thread=False)
@@ -34,6 +35,7 @@ class DBWriter:
         conn.execute("PRAGMA busy_timeout = 30000;")
         # Optional: balance durability and performance
         conn.execute("PRAGMA synchronous = NORMAL;")
+        _LOG.debug(f"Database connection opened for: {self.database_path}")
         return conn
 
     def _worker(self):
@@ -98,11 +100,16 @@ class DBWriter:
 
     def stop(self, wait=True):
         """Stop the worker thread. If wait=True, block until thread joins."""
+        _LOG.info(f"Stopping DBWriter for database: {self.database_path}")
         self._stop.set()
         # enqueue sentinel for immediate exit
         self._q.put(None)
         if wait:
             self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                _LOG.warning(f"DBWriter thread for {self.database_path} did not stop within 5s")
+            else:
+                _LOG.info(f"DBWriter stopped for database: {self.database_path}")
 
 
 def get_writer(database_path):

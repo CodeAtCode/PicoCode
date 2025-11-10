@@ -156,13 +156,17 @@ def insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path:
     dim = len(vector)
     if not row:
         set_vector_dimension(conn, dim)
+        logger.info(f"Initialized vector dimension: {dim}")
         try:
             conn.execute(f"SELECT vector_init('chunks', 'embedding', 'dimension={dim},type=FLOAT32,distance=COSINE')")
+            logger.debug(f"Vector index initialized for dimension {dim}")
         except Exception as e:
+            logger.error(f"vector_init failed: {e}")
             raise RuntimeError(f"vector_init failed: {e}") from e
     else:
         stored_dim = int(row[0])
         if stored_dim != dim:
+            logger.error(f"Embedding dimension mismatch: stored={stored_dim}, new={dim}")
             raise RuntimeError(f"Embedding dimension mismatch: stored={stored_dim}, new={dim}")
 
     q_vec = json.dumps(vector)
@@ -174,17 +178,22 @@ def insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path:
             cur.execute("INSERT INTO chunks (file_id, path, chunk_index, embedding) VALUES (?, ?, ?, vector_as_f32(?))",
                         (file_id, path, chunk_index, q_vec))
             conn.commit()
-            return int(cur.lastrowid)
+            rowid = int(cur.lastrowid)
+            logger.debug(f"Inserted chunk vector for {path} chunk {chunk_index}, rowid={rowid}")
+            return rowid
         except sqlite3.OperationalError as e:
             msg = str(e).lower()
             if "database is locked" in msg and attempt < DB_LOCK_RETRY_COUNT:
                 attempt += 1
                 delay = DB_LOCK_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning(f"Database locked, retrying in {delay}s (attempt {attempt}/{DB_LOCK_RETRY_COUNT})")
                 time.sleep(delay)
                 continue
             else:
+                logger.error(f"Failed to insert chunk vector after {attempt} retries: {e}")
                 raise RuntimeError(f"Failed to INSERT chunk vector (vector_as_f32 call): {e}") from e
         except Exception as e:
+            logger.error(f"Failed to insert chunk vector: {e}")
             raise RuntimeError(f"Failed to INSERT chunk vector (vector_as_f32 call): {e}") from e
 
 
@@ -203,6 +212,7 @@ def search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) ->
     Raises:
         RuntimeError: If vector search operations fail
     """
+    logger.debug(f"Searching vectors in database: {database_path}, top_k={top_k}")
     conn = connect_db(database_path)
     try:
         load_sqlite_vector_extension(conn)
@@ -222,7 +232,9 @@ def search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) ->
                 (q_json, top_k, top_k),
             )
             rows = cur.fetchall()
+            logger.debug(f"Vector search returned {len(rows)} results")
         except Exception as e:
+            logger.error(f"Vector search failed: {e}")
             raise RuntimeError(f"vector_full_scan call failed: {e}") from e
 
         results: List[Dict[str, Any]] = []
