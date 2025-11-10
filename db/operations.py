@@ -2,6 +2,7 @@ import os
 import sqlite3
 from typing import Any, Dict, List, Optional
 from functools import lru_cache
+import threading
 
 from utils.config import CFG  # config (keeps chunk_size etc if needed)
 from utils.logger import get_logger
