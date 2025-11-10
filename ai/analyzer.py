@@ -2,7 +2,6 @@ import os
 import json
 import time
 import traceback
-import hashlib
 import math
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -22,6 +21,7 @@ from db.vector_operations import (
 from .openai import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
 from utils.logger import get_logger
+from utils import compute_file_hash, chunk_text, norm, cosine
 from .smart_chunker import smart_chunk
 import logging
 
@@ -60,6 +60,18 @@ _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_THREADPOOL_WORKER
 logger = get_logger(__name__)
 
 
+def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, model: Optional[str] = None):
+    """
+    Wrapper to acquire semaphore inside executor task to avoid deadlock.
+    The semaphore is acquired in the worker thread, not the main thread.
+    """
+    semaphore.acquire()
+    try:
+        return get_embedding_for_text(text, model)
+    finally:
+        semaphore.release()
+
+
 def detect_language(path: str):
     if "LICENSE.md" in path:
         return "text"
@@ -72,26 +84,6 @@ def detect_language(path: str):
     ext = Path(path).suffix.lower()
     return EXT_LANG.get(ext, "text")
 
-
-def compute_file_hash(content: str) -> str:
-    """
-    Compute SHA256 hash of file content for change detection.
-    """
-    return hashlib.sha256(content.encode('utf-8')).hexdigest()
-
-
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
-    if chunk_size <= 0:
-        return [text]
-    step = max(1, chunk_size - overlap)
-    chunks: List[str] = []
-    start = 0
-    L = len(text)
-    while start < L:
-        end = min(start + chunk_size, L)
-        chunks.append(text[start:end])
-        start += step
-    return chunks
 
 
 # Main synchronous processing for a single file
@@ -198,15 +190,10 @@ def _process_file_sync(
             embedding_futures = []
             
             for idx, chunk_doc in batch:
-                # Acquire semaphore to bound concurrent embedding requests
-                semaphore.acquire()
-                try:
-                    embedding_start_time = time.time()
-                    future = _EXECUTOR.submit(get_embedding_for_text, chunk_doc.text, embedding_model)
-                    embedding_futures.append((idx, chunk_doc, future, embedding_start_time))
-                except Exception:
-                    semaphore.release()
-                    raise
+                # Submit task to executor; semaphore will be acquired inside the worker
+                embedding_start_time = time.time()
+                future = _EXECUTOR.submit(_get_embedding_with_semaphore, semaphore, chunk_doc.text, embedding_model)
+                embedding_futures.append((idx, chunk_doc, future, embedding_start_time))
 
             # Wait for batch to complete and store results
             saved_count = 0
@@ -232,8 +219,6 @@ def _process_file_sync(
                     logger.exception("Embedding retrieval failed for %s chunk %d: %s", rel_path, idx, e)
                     emb = None
                     failed_count += 1
-                finally:
-                    semaphore.release()
 
                 if emb:
                     try:
@@ -443,23 +428,6 @@ def analyze_local_path_background(local_path: str, database_path: str, venv_path
         logger.exception("Background analysis worker failed for %s", local_path)
 
 
-# Simple synchronous helpers preserved for compatibility --------------------------------
-def dot(a, b):
-    return sum(x * y for x, y in zip(a, b))
-
-
-def norm(a):
-    import math
-    return math.sqrt(sum(x * x for x in a))
-
-
-def cosine(a, b):
-    na = norm(a)
-    nb = norm(b)
-    if na == 0 or nb == 0:
-        return 0.0
-    return sum(x * y for x, y in zip(a, b)) / (na * nb)
-
 
 def search_semantic(query: str, database_path: str, top_k: int = 5):
     """
@@ -479,14 +447,3 @@ def search_semantic(query: str, database_path: str, top_k: int = 5):
 def call_coding_model(prompt: str, context: str = ""):
     combined = f"Context:\n{context}\n\nPrompt:\n{prompt}" if context else prompt
     return call_coding_api(combined)
-
-
-# llama-index helper ---------------------------------------------------------
-def llama_index_retrieve_documents(query: str, database_path: str, top_k: int = 5) -> List[Document]:
-    """
-    Return llama_index.core.Document objects for the top_k matching chunks using sqlite-vector.
-    """
-    from .llama_integration import llama_index_retrieve_documents as _llama_retrieve
-    return _llama_retrieve(query, database_path, top_k, 
-                          search_func=_search_vectors, 
-                          get_chunk_func=_get_chunk_text)
