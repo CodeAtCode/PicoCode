@@ -18,8 +18,7 @@ from db.vector_operations import (
     search_vectors as _search_vectors,
     get_chunk_text as _get_chunk_text,
 )
-from .openai import call_coding_api
-from .embedding_client import EmbeddingClient
+from .openai import call_coding_api, EmbeddingClient
 from llama_index.core import Document
 from utils.logger import get_logger
 from utils import compute_file_hash, chunk_text, norm, cosine
