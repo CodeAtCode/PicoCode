@@ -21,13 +21,10 @@ DEFAULT_CODING_MODEL = CFG.get("coding_model")
 # Embedding client logger
 _embedding_logger = logging.getLogger("ai.analyzer.embedding")
 
-# Embedding client configuration (can override via environment)
-EMBEDDING_API_URL = os.getenv("PICOCODE_EMBEDDING_URL", CFG.get("api_url", "https://example.com/v1/embeddings"))
-EMBEDDING_API_KEY = os.getenv("PICOCODE_EMBEDDING_API_KEY", CFG.get("api_key", ""))
+# Embedding client configuration (uses CFG values, can override specific ones via environment)
 DEFAULT_TIMEOUT = float(os.getenv("PICOCODE_EMBEDDING_TIMEOUT", "30"))  # seconds per request
 MAX_RETRIES = int(os.getenv("PICOCODE_EMBEDDING_RETRIES", "2"))
 BACKOFF_FACTOR = float(os.getenv("PICOCODE_EMBEDDING_BACKOFF", "1.5"))
-EMBEDDING_MODEL_NAME = os.getenv("PICOCODE_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL or "text-embedding-3-small")
 
 # Optionally enable requests debug logging by setting PICOCODE_HTTP_DEBUG=true
 if os.getenv("PICOCODE_HTTP_DEBUG", "").lower() in ("1", "true", "yes"):
@@ -132,21 +129,21 @@ class EmbeddingClient:
     Provides better debugging for embedding API failures.
     """
     def __init__(self,
-                 api_url: str = EMBEDDING_API_URL,
-                 api_key: str = EMBEDDING_API_KEY,
-                 model: str = EMBEDDING_MODEL_NAME,
+                 api_url: Optional[str] = None,
+                 api_key: Optional[str] = None,
+                 model: Optional[str] = None,
                  timeout: float = DEFAULT_TIMEOUT,
                  max_retries: int = MAX_RETRIES,
                  backoff: float = BACKOFF_FACTOR):
-        self.api_url = api_url
-        self.api_key = api_key
-        self.model = model
+        self.api_url = api_url or CFG.get("api_url")
+        self.api_key = api_key or CFG.get("api_key")
+        self.model = model or DEFAULT_EMBEDDING_MODEL or "text-embedding-3-small"
         self.timeout = timeout
         self.max_retries = max_retries
         self.backoff = backoff
         self.session = requests.Session()
-        if api_key:
-            self.session.headers.update({"Authorization": f"Bearer {api_key}"})
+        if self.api_key:
+            self.session.headers.update({"Authorization": f"Bearer {self.api_key}"})
         self.session.headers.update({"Content-Type": "application/json"})
 
     def _log_request_start(self, request_id: str, file_path: str, chunk_index: int, chunk_len: int):

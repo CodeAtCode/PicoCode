@@ -67,11 +67,9 @@ def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, fil
     """
     Wrapper to acquire semaphore inside executor task to avoid deadlock.
     The semaphore is acquired in the worker thread, not the main thread.
-    Now uses EmbeddingClient for better logging and error handling.
     """
     semaphore.acquire()
     try:
-        # Use the embedding client with enhanced logging
         return _embedding_client.embed_text(text, file_path=file_path, chunk_index=chunk_index)
     finally:
         semaphore.release()
