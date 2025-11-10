@@ -2,8 +2,6 @@ import os
 import json
 import time
 import traceback
-import sqlite3
-import importlib.resources
 import hashlib
 import math
 from pathlib import Path
@@ -13,6 +11,14 @@ import concurrent.futures
 import threading
 
 from db.operations import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
+from db.vector_operations import (
+    connect_db as _connect_db,
+    load_sqlite_vector_extension as _load_sqlite_vector_extension,
+    ensure_chunks_and_meta as _ensure_chunks_and_meta,
+    insert_chunk_vector_with_retry as _insert_chunk_vector_with_retry,
+    search_vectors as _search_vectors,
+    get_chunk_text as _get_chunk_text,
+)
 from .openai import get_embedding_for_text, call_coding_api
 from llama_index.core import Document
 from utils.logger import get_logger
@@ -49,18 +55,6 @@ PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
 _THREADPOOL_WORKERS = max(16, EMBEDDING_CONCURRENCY + 8)
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_THREADPOOL_WORKERS)
 
-# sqlite-vector defaults (sensible fixed defaults)
-SQLITE_VECTOR_PKG = "sqlite_vector.binaries"
-SQLITE_VECTOR_RESOURCE = "vector"
-SQLITE_VECTOR_VERSION_FN = "vector_version"      # SELECT vector_version();
-
-# Strict behavior: fail fast if extension can't be loaded or calls fail
-STRICT_VECTOR_INTEGRATION = True
-
-# Retry policy for DB-locked operations
-DB_LOCK_RETRY_COUNT = 6
-DB_LOCK_RETRY_BASE_DELAY = 0.05  # seconds, exponential backoff multiplier
-
 logger = get_logger(__name__)
 
 
@@ -84,7 +78,6 @@ def compute_file_hash(content: str) -> str:
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
-# Simple chunker (character-based). Tunable CHUNK_SIZE, CHUNK_OVERLAP.
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
     if chunk_size <= 0:
         return [text]
@@ -97,236 +90,6 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
         chunks.append(text[start:end])
         start += step
     return chunks
-
-
-# --- sqlite-vector integration helpers ---------------------------------------
-def _connect_db(db_path: str, timeout: float = 30.0) -> sqlite3.Connection:
-    # timeout instructs sqlite to wait up to `timeout` seconds for locks
-    conn = sqlite3.connect(db_path, timeout=timeout, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA busy_timeout = 30000;")  # 30s
-    except Exception:
-        pass
-    return conn
-
-
-def _load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:
-    """
-    Loads sqlite-vector binary from the installed python package and performs a lightweight
-    sanity check (calls vector_version() if available). Raises on error if STRICT_VECTOR_INTEGRATION.
-    """
-    try:
-        ext_path = importlib.resources.files(SQLITE_VECTOR_PKG) / SQLITE_VECTOR_RESOURCE
-        conn.load_extension(str(ext_path))
-        try:
-            conn.enable_load_extension(False)
-        except Exception:
-            pass
-        # optional quick check: call vector_version()
-        try:
-            cur = conn.execute(f"SELECT {SQLITE_VECTOR_VERSION_FN}()")
-            _ = cur.fetchone()
-        except Exception:
-            # version function may not be present; ignore
-            pass
-    except Exception as e:
-        if STRICT_VECTOR_INTEGRATION:
-            raise RuntimeError(f"Failed to load sqlite-vector extension: {e}") from e
-        else:
-            logger.warning("sqlite-vector extension not loaded: %s", e)
-
-
-def _ensure_chunks_and_meta(conn: sqlite3.Connection):
-    """
-    Create chunks table (if not exist) with embedding column and meta table for vector dimension.
-    Safe to call multiple times.
-    """
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS chunks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_id INTEGER NOT NULL,
-            path TEXT NOT NULL,
-            chunk_index INTEGER NOT NULL,
-            embedding BLOB,
-            created_at TEXT DEFAULT (datetime('now'))
-        )
-        """
-    )
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vector_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-        """
-    )
-    conn.commit()
-
-
-def _set_vector_dimension(conn: sqlite3.Connection, dim: int):
-    cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO vector_meta(key, value) VALUES('dimension', ?)", (str(dim),))
-    conn.commit()
-
-
-def _insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path: str, chunk_index: int, vector: List[float]) -> int:
-    """
-    Insert a chunk row with embedding using vector_as_f32(json); retries on sqlite3.OperationalError 'database is locked'.
-    Returns the chunks.rowid.
-    """
-    cur = conn.cursor()
-    # Ensure schema/meta present
-    _ensure_chunks_and_meta(conn)
-
-    # dimension handling: store or verify
-    cur.execute("SELECT value FROM vector_meta WHERE key = 'dimension'")
-    row = cur.fetchone()
-    dim = len(vector)
-    if not row:
-        _set_vector_dimension(conn, dim)
-        try:
-            conn.execute(f"SELECT vector_init('chunks', 'embedding', 'dimension={dim},type=FLOAT32,distance=COSINE')")
-        except Exception as e:
-            raise RuntimeError(f"vector_init failed: {e}") from e
-    else:
-        stored_dim = int(row[0])
-        if stored_dim != dim:
-            raise RuntimeError(f"Embedding dimension mismatch: stored={stored_dim}, new={dim}")
-
-    q_vec = json.dumps(vector)
-
-    attempt = 0
-    while True:
-        try:
-            # use vector_as_f32(json) as per API so extension formats blob
-            cur.execute("INSERT INTO chunks (file_id, path, chunk_index, embedding) VALUES (?, ?, ?, vector_as_f32(?))",
-                        (file_id, path, chunk_index, q_vec))
-            conn.commit()
-            return int(cur.lastrowid)
-        except sqlite3.OperationalError as e:
-            msg = str(e).lower()
-            if "database is locked" in msg and attempt < DB_LOCK_RETRY_COUNT:
-                attempt += 1
-                delay = DB_LOCK_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                time.sleep(delay)
-                continue
-            else:
-                raise RuntimeError(f"Failed to INSERT chunk vector (vector_as_f32 call): {e}") from e
-        except Exception as e:
-            raise RuntimeError(f"Failed to INSERT chunk vector (vector_as_f32 call): {e}") from e
-
-
-def _search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
-    """
-    Uses vector_full_scan to retrieve nearest neighbors from the chunks table.
-    Returns list of dicts: {file_id, path, chunk_index, score}
-    """
-    conn = _connect_db(database_path)
-    try:
-        _load_sqlite_vector_extension(conn)
-        _ensure_chunks_and_meta(conn)
-
-        q_json = json.dumps(q_vector)
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                """
-                SELECT c.file_id, c.path, c.chunk_index, v.distance
-                FROM vector_full_scan('chunks', 'embedding', vector_as_f32(?), ?) AS v
-                JOIN chunks AS c ON c.rowid = v.rowid
-                ORDER BY v.distance ASC
-                LIMIT ?
-                """,
-                (q_json, top_k, top_k),
-            )
-            rows = cur.fetchall()
-        except Exception as e:
-            raise RuntimeError(f"vector_full_scan call failed: {e}") from e
-
-        results: List[Dict[str, Any]] = []
-        for file_id, path, chunk_index, distance in rows:
-            try:
-                score = 1.0 - float(distance)
-            except Exception:
-                score = float(distance)
-            results.append({"file_id": int(file_id), "path": path, "chunk_index": int(chunk_index), "score": score})
-        return results
-    finally:
-        conn.close()
-
-
-def _get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optional[str]:
-    """
-    Get chunk text by reading from filesystem instead of database.
-    Uses project_path metadata and file path to read the actual file.
-    """
-    conn = _connect_db(database_path)
-    try:
-        cur = conn.cursor()
-        # Get file path from database
-        cur.execute("SELECT path FROM files WHERE id = ?", (file_id,))
-        row = cur.fetchone()
-        if not row:
-            logger.warning(f"File not found in database: file_id={file_id}")
-            return None
-        
-        file_path = row[0]
-        if not file_path:
-            logger.warning(f"File path is empty for file_id={file_id}")
-            return None
-        
-        # Get project path from metadata
-        project_path = get_project_metadata(database_path, "project_path")
-        if not project_path:
-            logger.error("Project path not found in metadata, cannot read file from filesystem")
-            raise RuntimeError("Project path metadata is missing - ensure the indexing process has stored project metadata properly")
-        
-        # Construct full file path and resolve to absolute path
-        full_path = os.path.abspath(os.path.join(project_path, file_path))
-        normalized_project_path = os.path.abspath(project_path)
-        
-        # Security check: ensure the resolved path is within the project directory
-        try:
-            common = os.path.commonpath([full_path, normalized_project_path])
-            if common != normalized_project_path:
-                logger.error(f"Path traversal attempt detected: {file_path} resolves outside project directory")
-                return None
-            if full_path != normalized_project_path and not full_path.startswith(normalized_project_path + os.sep):
-                logger.error(f"Path traversal attempt detected: {file_path} does not start with project directory")
-                return None
-        except ValueError:
-            logger.error(f"Path traversal attempt detected: {file_path} is on a different drive or incompatible path")
-            return None
-        
-        # Read file content from filesystem
-        try:
-            with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
-                content = fh.read()
-        except Exception as e:
-            logger.warning(f"Failed to read file from filesystem: {full_path}, error: {e}")
-            return None
-        
-        if not content:
-            return None
-        
-        # Extract the chunk
-        if CHUNK_SIZE <= 0:
-            return content
-        
-        # Validate chunk_index
-        if chunk_index < 0:
-            logger.warning(f"Invalid chunk_index {chunk_index} for file_id={file_id}")
-            return None
-        
-        step = max(1, CHUNK_SIZE - CHUNK_OVERLAP)
-        start = chunk_index * step
-        end = min(start + CHUNK_SIZE, len(content))
-        return content[start:end]
-    finally:
-        conn.close()
 
 
 # Main synchronous processing for a single file
@@ -659,19 +422,15 @@ def analyze_local_path_sync(
 
 def analyze_local_path_background(local_path: str, database_path: str, venv_path: Optional[str] = None, max_file_size: int = 200000, cfg: Optional[dict] = None):
     """
-    Non-blocking wrapper intended to be scheduled by FastAPI BackgroundTasks.
-    This function starts a daemon thread which runs the synchronous analyzer and returns immediately.
+    Wrapper intended to be scheduled by FastAPI BackgroundTasks.
+    This function runs the synchronous analyzer in the FastAPI background task.
     Usage from FastAPI endpoint:
         background_tasks.add_task(analyze_local_path_background, local_path, database_path, venv_path, max_file_size, cfg)
     """
-    def _worker():
-        try:
-            analyze_local_path_sync(local_path, database_path, venv_path=venv_path, max_file_size=max_file_size, cfg=cfg)
-        except Exception:
-            logger.exception("Background analysis worker failed for %s", local_path)
-
-    t = threading.Thread(target=_worker, name=f"analysis-worker-{os.path.basename(local_path)}", daemon=True)
-    t.start()
+    try:
+        analyze_local_path_sync(local_path, database_path, venv_path=venv_path, max_file_size=max_file_size, cfg=cfg)
+    except Exception:
+        logger.exception("Background analysis worker failed for %s", local_path)
 
 
 # Simple synchronous helpers preserved for compatibility --------------------------------
