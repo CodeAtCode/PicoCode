@@ -22,7 +22,6 @@
     .controls-area { display:flex; gap:.5rem; align-items:center; }
     .empty-state { height:62vh; display:flex; align-items:center; justify-content:center; color:#6c757d; }
     .btn-sm-icon { padding:.25rem .5rem; font-size:.85rem; }
-    #indexProgress { margin-bottom: 0.75rem; min-height: 2rem; }
     .progress-info { font-size: .95rem; color: #333; display:flex; align-items:center; gap: 0.5rem; }
     .project-item { cursor: pointer; }
     .project-item:hover { background-color: #f8f9fa; }
@@ -55,13 +54,12 @@
         <div class="card mt-3">
           <div class="card-body">
             <h5 class="card-title">Projects</h5>
-            <div id="indexProgress"></div>
             {% if projects %}
               <ul class="list-group list-group-flush" id="projectsList">
                 {% for p in projects %}
                   <li class="list-group-item d-flex justify-content-between align-items-start project-item" data-project-id="{{ p.id }}">
                     <div class="flex-grow-1">
-                      <div class="fw-bold">{{ p.name or p.path.split('/')[-1] }}</div>
+                      <div class="fw-bold text-black">{{ p.name or p.path.split('/')[-1] }}</div>
                       <small class="text-muted">{{ p.path }}</small><br>
                       <small class="text-muted">
                         Status: <span class="badge bg-{{ 'success' if p.status=='ready' else ('warning' if p.status=='indexing' else 'secondary') }}" data-status="{{ p.status }}">{{ p.status }}</span>
