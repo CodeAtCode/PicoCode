@@ -53,6 +53,7 @@ EMBEDDING_CONCURRENCY = 4
 EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
 PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
 EMBEDDING_TIMEOUT = 30  # Timeout in seconds for each embedding API call
+FILE_PROCESSING_TIMEOUT = 300  # Timeout in seconds for processing a single file (5 minutes)
 _THREADPOOL_WORKERS = max(16, EMBEDDING_CONCURRENCY + 8)
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_THREADPOOL_WORKERS)
 
@@ -360,7 +361,7 @@ def analyze_local_path_sync(
 
             for fut in concurrent.futures.as_completed(futures):
                 try:
-                    r = fut.result()
+                    r = fut.result(timeout=FILE_PROCESSING_TIMEOUT)
                     
                     # Increment completed counter and check for periodic logging
                     with counters[2]:
@@ -379,6 +380,10 @@ def analyze_local_path_sync(
                         # Log periodic progress updates (every 10 files)
                         if should_log:
                             logger.info(f"Progress: {completed_count}/{total_files} files processed ({file_count} stored, {emb_count} with embeddings, {skipped_count} skipped)")
+                except concurrent.futures.TimeoutError:
+                    logger.error(f"File processing timeout ({FILE_PROCESSING_TIMEOUT}s exceeded)")
+                    with counters[2]:
+                        counters[1] += 1
                 except Exception:
                     logger.exception("A per-file task failed")
 
