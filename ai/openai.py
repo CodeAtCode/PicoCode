@@ -296,26 +296,6 @@ class EmbeddingClient:
         return results
 
 
-def get_embedding_for_text(text: str, model: Optional[str] = None):
-    """
-    Return embedding vector (list[float]) using the new OpenAI client.
-    Includes rate limiting, retry logic with exponential backoff, and circuit breaker.
-    model: optional model id; if not provided, uses DEFAULT_EMBEDDING_MODEL from CFG.
-    """
-    model_to_use = model or DEFAULT_EMBEDDING_MODEL
-    if not model_to_use:
-        raise RuntimeError("No embedding model configured. Set EMBEDDING_MODEL in .env or pass model argument.")
-
-    def _get_embedding():
-        resp = _client.embeddings.create(model=model_to_use, input=text)
-        return resp.data[0].embedding
-    
-    try:
-        return _retry_with_backoff(_get_embedding)
-    except Exception as e:
-        raise RuntimeError(f"Failed to obtain embedding from OpenAI client: {e}") from e
-
-
 def call_coding_api(prompt: str, model: Optional[str] = None, max_tokens: int = 1024):
     """
     Call a generative/coding model via the new OpenAI client.

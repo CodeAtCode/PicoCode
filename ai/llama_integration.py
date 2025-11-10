@@ -4,10 +4,13 @@ LlamaIndex integration for document retrieval.
 from typing import List
 from llama_index.core import Document
 
-from .openai import get_embedding_for_text
+from .openai import EmbeddingClient
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Create a module-level embedding client instance
+_embedding_client = EmbeddingClient()
 
 
 def llama_index_retrieve_documents(query: str, database_path: str, top_k: int = 5, 
@@ -28,7 +31,7 @@ def llama_index_retrieve_documents(query: str, database_path: str, top_k: int = 
     if search_func is None or get_chunk_func is None:
         raise ValueError("search_func and get_chunk_func must be provided")
     
-    q_emb = get_embedding_for_text(query)
+    q_emb = _embedding_client.embed_text(query, file_path="<query>", chunk_index=0)
     if not q_emb:
         return []
 
