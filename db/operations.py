@@ -231,6 +231,8 @@ def clear_project_data(database_path: str) -> None:
         cur.execute("DELETE FROM chunks")
         # Delete files
         cur.execute("DELETE FROM files")
+        # Clear vector metadata to allow re-indexing with different embedding dimensions
+        cur.execute("DELETE FROM vector_meta WHERE key = 'dimension'")
         conn.commit()
         
         # Invalidate caches

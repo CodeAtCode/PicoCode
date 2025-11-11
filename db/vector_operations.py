@@ -210,8 +210,24 @@ def search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) ->
         load_sqlite_vector_extension(conn)
         ensure_chunks_and_meta(conn)
 
-        q_json = json.dumps(q_vector)
+        # Ensure vector index is initialized before searching
         cur = conn.cursor()
+        cur.execute("SELECT value FROM vector_meta WHERE key = 'dimension'")
+        row = cur.fetchone()
+        if not row:
+            # No dimension stored means no vectors have been indexed yet
+            logger.info("No vector dimension found in metadata - no chunks indexed yet")
+            return []
+        
+        dim = int(row[0])
+        try:
+            conn.execute(f"SELECT vector_init('chunks', 'embedding', 'dimension={dim},type=FLOAT32,distance=COSINE')")
+            logger.debug(f"Vector index initialized for search with dimension {dim}")
+        except Exception as e:
+            logger.error(f"vector_init failed during search: {e}")
+            raise RuntimeError(f"vector_init failed during search: {e}") from e
+
+        q_json = json.dumps(q_vector)
         try:
             cur.execute(
                 """
