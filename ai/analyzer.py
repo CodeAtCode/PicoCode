@@ -86,10 +86,9 @@ def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, fil
     semaphore.acquire()
     try:
         _thread_state.stage = "calling_embed_text"
-        logger.debug(f"Worker thread starting embed_text for {file_path} chunk {chunk_index}")
+        # Removed verbose debug logs for each chunk embedding
         result = _embedding_client.embed_text(text, file_path=file_path, chunk_index=chunk_index)
         _thread_state.stage = "completed"
-        logger.debug(f"Worker thread completed embed_text for {file_path} chunk {chunk_index}")
         return result
     except Exception as e:
         _thread_state.stage = f"exception: {type(e).__name__}"
@@ -158,14 +157,10 @@ def _process_file_sync(
         
         # Check if file needs reindexing (incremental mode)
         if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
-            logger.debug(f"Skipping unchanged file: {rel_path}")
+            # Removed verbose debug log for skipped files
             return {"stored": False, "embedded": False, "skipped": True}
 
-        # Log file processing with progress
-        if file_num > 0 and total_files > 0:
-            logger.info(f"Processing file ({file_num}/{total_files}): {rel_path}")
-        else:
-            logger.info(f"Processing file: {rel_path}")
+        # Removed per-file processing log to reduce verbosity - progress is logged periodically
 
         # store file (synchronous DB writer) with metadata
         try:
@@ -282,25 +277,16 @@ def _process_file_sync(
                         embedded_any = True
                     except Exception as e:
                         failed_count += 1
-                        try:
-                            err_content = f"Failed to insert chunk vector: {e}\n\nTraceback:\n{traceback.format_exc()}"
-                            print(err_content)
-                        except Exception:
-                            logger.exception("Failed to write chunk-insert error to disk for %s chunk %d", rel_path, idx)
+                        # Log error instead of printing to reduce clutter
+                        logger.error(f"Failed to insert chunk vector for {rel_path} chunk {idx}: {e}")
                 else:
-                    logger.debug(f"Skipping chunk {idx} for {rel_path} - no embedding vector available")
+                    # Removed verbose debug log for skipping chunks
+                    pass
 
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
-        tb = traceback.format_exc()
-        try:
-            error_payload = {"file": rel_path, "error": "processing error", "traceback": tb[:2000]}
-            try:
-                print(error_payload)
-            except Exception:
-                logger.exception("Failed to write exception error to disk for file %s", rel_path)
-        except Exception:
-            logger.exception("Failed while handling exception for file %s", rel_path)
+        # Log error instead of printing to reduce clutter
+        logger.exception("Failed to process file %s", rel_path)
         return {"stored": False, "embedded": False, "skipped": False}
 
 
@@ -441,13 +427,11 @@ def analyze_local_path_sync(
                 "meta",
             )
         except Exception:
-            try:
-                print("Failed to store uv_detected.json in DB")
-            except Exception:
-                logger.exception("Failed to write uv_detected meta error")
+            # Ignore failure to store non-critical metadata
+            pass
 
     except Exception:
-        traceback.print_exc()
+        logger.exception("Analysis failed for %s", local_path)
 
 
 def analyze_local_path_background(local_path: str, database_path: str, venv_path: Optional[str] = None, max_file_size: int = 200000, cfg: Optional[dict] = None):
