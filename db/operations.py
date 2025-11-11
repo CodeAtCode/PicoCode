@@ -386,18 +386,6 @@ def _ensure_projects_dir():
         raise
 
 
-def _retry_on_db_locked(func, *args, max_retries=DB_RETRY_COUNT, **kwargs):
-    """
-    Retry a database operation if it's locked.
-    
-    DEPRECATED: Use @retry_on_db_locked decorator from utils.retry instead.
-    This function is maintained for backward compatibility.
-    """
-    # Use the retry decorator from utils.retry
-    decorated_func = retry_on_db_locked(max_retries=max_retries, base_delay=DB_RETRY_DELAY)(func)
-    return decorated_func(*args, **kwargs)
-
-
 def _get_project_id(project_path: str) -> str:
     """Generate a stable project ID from the project path."""
     import hashlib
@@ -416,40 +404,34 @@ def _get_projects_registry_path() -> str:
     return os.path.join(PROJECTS_DIR, "registry.db")
 
 
+@retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
 def _init_registry_db():
     """Initialize the projects registry database with proper configuration."""
     registry_path = _get_projects_registry_path()
     
-    def _init():
-        conn = _get_connection(registry_path)
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS projects (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    path TEXT NOT NULL UNIQUE,
-                    database_path TEXT NOT NULL,
-                    created_at TEXT DEFAULT (datetime('now')),
-                    last_indexed_at TEXT,
-                    status TEXT DEFAULT 'created',
-                    settings TEXT
-                )
-                """
-            )
-            conn.commit()
-        except Exception as e:
-            _LOG.error(f"Failed to initialize registry database: {e}")
-            raise
-        finally:
-            conn.close()
-    
+    conn = _get_connection(registry_path)
     try:
-        _retry_on_db_locked(_init)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                database_path TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_indexed_at TEXT,
+                status TEXT DEFAULT 'created',
+                settings TEXT
+            )
+            """
+        )
+        conn.commit()
     except Exception as e:
-        _LOG.error(f"Failed to initialize registry after retries: {e}")
+        _LOG.error(f"Failed to initialize registry database: {e}")
         raise
+    finally:
+        conn.close()
 
 
 def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, Any]:
@@ -510,6 +492,7 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _create():
         conn = _get_connection(registry_path)
         try:
@@ -551,7 +534,7 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
             conn.close()
     
     try:
-        result = _retry_on_db_locked(_create)
+        result = _create()
         return result
     except Exception as e:
         _LOG.error(f"Failed to create project: {e}")
@@ -571,6 +554,7 @@ def get_project(project_path: str) -> Optional[Dict[str, Any]]:
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _get():
         conn = _get_connection(registry_path)
         try:
@@ -584,7 +568,7 @@ def get_project(project_path: str) -> Optional[Dict[str, Any]]:
         finally:
             conn.close()
     
-    return _retry_on_db_locked(_get)
+    return _get()
 
 
 def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
@@ -599,6 +583,7 @@ def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _get():
         conn = _get_connection(registry_path)
         try:
@@ -612,7 +597,7 @@ def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
         finally:
             conn.close()
     
-    return _retry_on_db_locked(_get)
+    return _get()
 
 
 def list_projects() -> List[Dict[str, Any]]:
@@ -621,6 +606,7 @@ def list_projects() -> List[Dict[str, Any]]:
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _list():
         conn = _get_connection(registry_path)
         try:
@@ -631,7 +617,7 @@ def list_projects() -> List[Dict[str, Any]]:
         finally:
             conn.close()
     
-    return _retry_on_db_locked(_list)
+    return _list()
 
 
 def update_project_status(project_id: str, status: str, last_indexed_at: Optional[str] = None):
@@ -640,6 +626,7 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _update():
         conn = _get_connection(registry_path)
         try:
@@ -658,7 +645,7 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
         finally:
             conn.close()
     
-    _retry_on_db_locked(_update)
+    _update()
     # Invalidate cache after update
     project_cache.invalidate(f"project:id:{project_id}")
 
@@ -670,6 +657,7 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _update():
         conn = _get_connection(registry_path)
         try:
@@ -682,7 +670,7 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
         finally:
             conn.close()
     
-    _retry_on_db_locked(_update)
+    _update()
     # Invalidate cache after update
     project_cache.invalidate(f"project:id:{project_id}")
 
@@ -704,6 +692,7 @@ def delete_project(project_id: str):
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _delete():
         conn = _get_connection(registry_path)
         try:
@@ -713,7 +702,7 @@ def delete_project(project_id: str):
         finally:
             conn.close()
     
-    _retry_on_db_locked(_delete)
+    _delete()
     # Invalidate cache after deletion
     project_cache.invalidate(f"project:id:{project_id}")
     if project.get("path"):
