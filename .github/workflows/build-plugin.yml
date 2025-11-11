@@ -23,13 +23,13 @@ jobs:
     
     - name: Build plugin
       run: |
-        cd plugin
+        cd ide-plugins
         ./gradlew buildPlugin
     
     - name: Get plugin version
       id: plugin_version
       run: |
-        cd plugin
+        cd ide-plugins
         VERSION=$(grep "^version" build.gradle.kts | cut -d'"' -f2)
         echo "version=$VERSION" >> $GITHUB_OUTPUT
     
