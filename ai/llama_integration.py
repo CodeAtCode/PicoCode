@@ -1,10 +1,13 @@
 """
 LlamaIndex integration for document retrieval.
+Provides RAG functionality using llama-index with sqlite-vector backend.
 """
-from typing import List
+from typing import List, Optional
 from llama_index.core import Document
+from llama_index.core.vector_stores.types import VectorStoreQuery
 
 from .openai import EmbeddingClient
+from .llama_vector_store import SQLiteVectorStore
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -13,36 +16,71 @@ logger = get_logger(__name__)
 _embedding_client = EmbeddingClient()
 
 
-def llama_index_retrieve_documents(query: str, database_path: str, top_k: int = 5, 
-                                   search_func=None, get_chunk_func=None) -> List[Document]:
+def llama_index_search(query: str, database_path: str, top_k: int = 5) -> List[Document]:
     """
-    Return llama_index.core.Document objects for the top_k matching chunks using sqlite-vector.
+    Perform semantic search using llama-index with sqlite-vector backend.
     
     Args:
         query: Search query text
         database_path: Path to project database
         top_k: Number of results to return
-        search_func: Function to search vectors (injected from analyzer)
-        get_chunk_func: Function to get chunk text (injected from analyzer)
     
     Returns:
         List of Document objects with chunk text and metadata
     """
-    if search_func is None or get_chunk_func is None:
-        raise ValueError("search_func and get_chunk_func must be provided")
-    
-    q_emb = _embedding_client.embed_text(query, file_path="<query>", chunk_index=0)
-    if not q_emb:
+    try:
+        # Get query embedding
+        q_emb = _embedding_client.embed_text(query, file_path="<query>", chunk_index=0)
+        if not q_emb:
+            logger.warning("Failed to generate query embedding")
+            return []
+        
+        # Create vector store
+        vector_store = SQLiteVectorStore(database_path)
+        
+        # Create query
+        vector_query = VectorStoreQuery(
+            query_embedding=q_emb,
+            similarity_top_k=top_k
+        )
+        
+        # Execute query
+        query_result = vector_store.query(vector_query)
+        
+        # Convert TextNodes to Documents
+        docs: List[Document] = []
+        for node, score in zip(query_result.nodes, query_result.similarities):
+            doc = Document(
+                text=node.text,
+                metadata={
+                    **node.metadata,
+                    "score": score
+                }
+            )
+            docs.append(doc)
+        
+        logger.info(f"llama-index search returned {len(docs)} documents")
+        return docs
+        
+    except Exception as e:
+        logger.exception(f"llama-index search failed: {e}")
         return []
 
-    rows = search_func(database_path, q_emb, top_k=top_k)
-    docs: List[Document] = []
-    for r in rows:
-        fid = r.get("file_id")
-        path = r.get("path")
-        chunk_idx = r.get("chunk_index", 0)
-        score = r.get("score", 0.0)
-        chunk_text = get_chunk_func(database_path, fid, chunk_idx) or ""
-        doc = Document(text=chunk_text, extra_info={"path": path, "file_id": fid, "chunk_index": chunk_idx, "score": score})
-        docs.append(doc)
-    return docs
+
+def llama_index_retrieve_documents(query: str, database_path: str, top_k: int = 5, 
+                                   search_func=None, get_chunk_func=None) -> List[Document]:
+    """
+    Legacy function - now redirects to llama_index_search.
+    
+    Args:
+        query: Search query text
+        database_path: Path to project database
+        top_k: Number of results to return
+        search_func: Deprecated - not used
+        get_chunk_func: Deprecated - not used
+    
+    Returns:
+        List of Document objects with chunk text and metadata
+    """
+    return llama_index_search(query, database_path, top_k)
+

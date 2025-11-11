@@ -64,6 +64,22 @@
 
         <div class="card mt-3">
           <div class="card-body">
+            <h5 class="card-title">Add New Project</h5>
+            <div class="mb-2">
+              <label for="new_project_path" class="form-label">Project Path</label>
+              <input type="text" id="new_project_path" class="form-control form-control-sm" placeholder="/path/to/your/project">
+              <small class="text-muted">Absolute path to the project directory</small>
+            </div>
+            <div class="mb-2">
+              <label for="new_project_name" class="form-label">Project Name (optional)</label>
+              <input type="text" id="new_project_name" class="form-control form-control-sm" placeholder="My Project">
+            </div>
+            <button id="createProjectBtn" class="btn btn-success w-100" type="button">Create & Index Project</button>
+          </div>
+        </div>
+
+        <div class="card mt-3">
+          <div class="card-body">
             <h5 class="card-title">Projects</h5>
             {% if projects %}
               <ul class="list-group list-group-flush" id="projectsList">
@@ -191,26 +207,19 @@
         }
         
         if (msg.context && msg.context.length > 0) {
-          content += '<div class="mt-3"><strong>Retrieved Files:</strong></div>';
+          content += '<div class="mt-3"><strong>Files Used:</strong></div>';
+          content += '<div class="context-list">';
           msg.context.forEach(c => {
-            const hasContent = c.content && c.content.trim().length > 0;
             content += `
               <div class="context-item">
                 <div class="context-item-header">
                   📄 ${escapeHtml(c.path)} 
                   <span class="badge bg-primary">${c.score.toFixed(4)}</span>
                 </div>
+              </div>
             `;
-            if (hasContent) {
-              // Show truncated content
-              const maxLength = 300;
-              const contentPreview = c.content.length > maxLength 
-                ? c.content.substring(0, maxLength) + '...' 
-                : c.content;
-              content += `<div class="context-item-content">${escapeHtml(contentPreview)}</div>`;
-            }
-            content += `</div>`;
           });
+          content += '</div>';
         }
         
         content += `
@@ -303,6 +312,71 @@
         chatHistory = [];
         localStorage.removeItem("picocode_chat_history");
         renderChat();
+      }
+    });
+
+    // Handle creating new project
+    document.getElementById("createProjectBtn").addEventListener("click", async () => {
+      const projectPath = document.getElementById("new_project_path").value.trim();
+      const projectName = document.getElementById("new_project_name").value.trim();
+      
+      if (!projectPath) {
+        alert("Please enter a project path");
+        return;
+      }
+      
+      try {
+        // First, create the project
+        const createResponse = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            path: projectPath,
+            name: projectName || null
+          })
+        });
+        
+        if (!createResponse.ok) {
+          const data = await createResponse.json();
+          alert(`Failed to create project: ${data.error || 'Unknown error'}`);
+          return;
+        }
+        
+        const project = await createResponse.json();
+        const projectId = project.id;
+        
+        // Then, start indexing
+        const indexResponse = await fetch('/api/projects/index', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            project_id: projectId,
+            incremental: true
+          })
+        });
+        
+        if (indexResponse.ok) {
+          alert(`Project created and indexing started!\nProject ID: ${projectId}`);
+          // Clear form
+          document.getElementById("new_project_path").value = "";
+          document.getElementById("new_project_name").value = "";
+          // Reload page to show new project
+          window.location.reload();
+        } else {
+          const data = await indexResponse.json();
+          alert(`Project created but indexing failed: ${data.error || 'Unknown error'}`);
+          window.location.reload();
+        }
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      }
+    });
+
+    // Allow Enter key to create project
+    document.getElementById("new_project_path").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        document.getElementById("createProjectBtn").click();
       }
     });
 
