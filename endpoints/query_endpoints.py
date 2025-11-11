@@ -29,18 +29,18 @@ def api_query(http_request: Request, request: QueryRequest):
     - **project_id**: Unique project identifier
     - **query**: Search query text
     - **top_k**: Number of results to return (default: 5, max: 20)
-    - **include_content**: Whether to include file content in results (default: True)
     
     Performs semantic search using vector embeddings:
     - Generates embedding for query
     - Finds most similar code chunks
-    - Returns ranked results with scores
-    - Optionally includes actual file content
+    - Returns ranked results with scores and content
+    
+    Note: Content is always included as it's needed for the coding model.
     
     Rate limit: 100 requests per minute per IP.
     
     Returns:
-    - **results**: Array of matching code chunks (with content if requested)
+    - **results**: Array of matching code chunks with content
     - **project_id**: Project identifier
     - **query**: Original query text
     """
@@ -60,8 +60,7 @@ def api_query(http_request: Request, request: QueryRequest):
             project_id=request.project_id,
             query=request.query,
             top_k=request.top_k,
-            use_cache=True,
-            include_content=request.include_content if request.include_content is not None else True
+            use_cache=True
         )
         return JSONResponse(result)
     except ValueError as e:

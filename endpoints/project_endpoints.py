@@ -104,13 +104,28 @@ def api_get_project(project_id: str):
         
         # Add indexing statistics if project has a database
         db_path = project.get("database_path")
+        project_path = project.get("path")
+        
         if db_path and os.path.exists(db_path):
             try:
                 from db.operations import get_project_stats
                 stats = get_project_stats(db_path)
+                
+                # Count total files in project directory for progress tracking
+                total_files = 0
+                if project_path and os.path.exists(project_path):
+                    try:
+                        for root, dirs, files in os.walk(project_path):
+                            # Skip common ignored directories
+                            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['node_modules', '__pycache__', 'venv', '.venv']]
+                            total_files += len([f for f in files if not f.startswith('.')])
+                    except Exception as e:
+                        logger.warning(f"Could not count total files: {e}")
+                
                 project["indexing_stats"] = {
                     "file_count": stats.get("file_count", 0),
                     "embedding_count": stats.get("embedding_count", 0),
+                    "total_files": total_files,
                     "is_indexed": stats.get("file_count", 0) > 0
                 }
             except Exception as e:
@@ -118,12 +133,14 @@ def api_get_project(project_id: str):
                 project["indexing_stats"] = {
                     "file_count": 0,
                     "embedding_count": 0,
+                    "total_files": 0,
                     "is_indexed": False
                 }
         else:
             project["indexing_stats"] = {
                 "file_count": 0,
                 "embedding_count": 0,
+                "total_files": 0,
                 "is_indexed": False
             }
         

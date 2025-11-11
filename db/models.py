@@ -19,5 +19,4 @@ class QueryRequest(BaseModel):
     project_id: str
     query: str
     top_k: Optional[int] = 5
-    include_content: Optional[bool] = True  # Whether to include file content in results
 

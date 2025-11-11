@@ -184,8 +184,8 @@ async def code_endpoint(request: Request):
     # If RAG requested, perform semantic search and build context
     if use_rag:
         try:
-            # Retrieve with content included
-            retrieved = search_semantic(prompt, database_path, top_k=top_k, include_content=True)
+            # Retrieve with content (always included)
+            retrieved = search_semantic(prompt, database_path, top_k=top_k)
             # Build context WITH actual file content for better RAG results
             context_parts = []
             total_len = len(combined_context)
@@ -207,7 +207,6 @@ async def code_endpoint(request: Request):
                         used_context.append({
                             "path": path, 
                             "score": score,
-                            "content": truncated_content,
                             "file_id": r.get("file_id"),
                             "chunk_index": r.get("chunk_index")
                         })
@@ -218,7 +217,6 @@ async def code_endpoint(request: Request):
                 used_context.append({
                     "path": path, 
                     "score": score,
-                    "content": content,
                     "file_id": r.get("file_id"),
                     "chunk_index": r.get("chunk_index")
                 })

@@ -2,18 +2,18 @@
 LlamaIndex integration for document retrieval.
 Provides RAG functionality using llama-index with sqlite-vector backend.
 """
-from typing import List, Optional
+from typing import List
 from llama_index.core import Document
 from llama_index.core.vector_stores.types import VectorStoreQuery
 
-from .openai import EmbeddingClient
+from .llama_embeddings import OpenAICompatibleEmbedding
 from .llama_vector_store import SQLiteVectorStore
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 # Create a module-level embedding client instance
-_embedding_client = EmbeddingClient()
+_embedding_client = OpenAICompatibleEmbedding()
 
 
 def llama_index_search(query: str, database_path: str, top_k: int = 5) -> List[Document]:
@@ -29,8 +29,8 @@ def llama_index_search(query: str, database_path: str, top_k: int = 5) -> List[D
         List of Document objects with chunk text and metadata
     """
     try:
-        # Get query embedding
-        q_emb = _embedding_client.embed_text(query, file_path="<query>", chunk_index=0)
+        # Get query embedding using llama-index embedding client
+        q_emb = _embedding_client._get_query_embedding(query)
         if not q_emb:
             logger.warning("Failed to generate query embedding")
             return []

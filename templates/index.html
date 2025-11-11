@@ -93,7 +93,7 @@
                       </small>
                       <br>
                       <small class="text-muted indexing-info" style="display:none;">
-                        Indexed: <span class="file-count">0</span> files | <span class="embedding-count">0</span> chunks
+                        Indexed: <span class="file-count">0</span>/<span class="total-files">?</span> files | <span class="embedding-count">0</span> chunks
                       </small>
                     </div>
                     <div class="d-flex gap-1">
@@ -420,14 +420,16 @@
               if (details.indexing_stats) {
                 const indexingInfo = item.querySelector('.indexing-info');
                 const fileCount = item.querySelector('.file-count');
+                const totalFiles = item.querySelector('.total-files');
                 const embeddingCount = item.querySelector('.embedding-count');
                 
-                if (indexingInfo && fileCount && embeddingCount) {
+                if (indexingInfo && fileCount && totalFiles && embeddingCount) {
                   fileCount.textContent = details.indexing_stats.file_count || 0;
+                  totalFiles.textContent = details.indexing_stats.total_files || '?';
                   embeddingCount.textContent = details.indexing_stats.embedding_count || 0;
                   
                   // Show stats if project has been indexed
-                  if (details.indexing_stats.file_count > 0) {
+                  if (details.indexing_stats.file_count > 0 || details.indexing_stats.total_files > 0) {
                     indexingInfo.style.display = 'block';
                   } else {
                     indexingInfo.style.display = 'none';
