@@ -10,6 +10,8 @@ jobs:
   build-kotlin-plugin:
     name: 'Build (matrix: Java ${{ matrix.java-version }})'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         java-version: [11, 17]
