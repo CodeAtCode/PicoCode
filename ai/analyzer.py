@@ -356,12 +356,10 @@ def analyze_local_path_sync(
             for fut in concurrent.futures.as_completed(futures):
                 try:
                     r = fut.result(timeout=FILE_PROCESSING_TIMEOUT)
-                    
+
                     # Increment completed counter and check for periodic logging
                     with counters[2]:
                         counters[1] += 1
-                        completed_count = counters[1]
-                        should_log = completed_count % PROGRESS_LOG_INTERVAL == 0
                     
                     if isinstance(r, dict):
                         if r.get("stored"):
@@ -370,10 +368,6 @@ def analyze_local_path_sync(
                             emb_count += 1
                         if r.get("skipped"):
                             skipped_count += 1
-                        
-                        # Log periodic progress updates (every 10 files)
-                        if should_log:
-                            logger.info(f"Progress: {completed_count}/{total_files} files processed ({file_count} stored, {emb_count} with embeddings, {skipped_count} skipped)")
                 except concurrent.futures.TimeoutError:
                     logger.error(f"File processing timeout ({FILE_PROCESSING_TIMEOUT}s exceeded)")
                     with counters[2]:

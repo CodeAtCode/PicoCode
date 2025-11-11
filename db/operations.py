@@ -69,7 +69,6 @@ def init_db(database_path: str) -> None:
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 path TEXT NOT NULL UNIQUE,
-                content TEXT,
                 language TEXT,
                 snippet TEXT,
                 last_modified REAL,
