@@ -5,11 +5,11 @@ The program will ALWAYS crash if the sqlite-vector extension fails to load (stri
 """
 import os
 import json
-import time
 import sqlite3
 import importlib.resources
 from typing import List, Dict, Any, Optional
 from utils.logger import get_logger
+from utils.retry import retry_on_exception
 
 logger = get_logger(__name__)
 
@@ -18,7 +18,7 @@ SQLITE_VECTOR_PKG = "sqlite_vector.binaries"
 SQLITE_VECTOR_RESOURCE = "vector"
 SQLITE_VECTOR_VERSION_FN = "vector_version"      # SELECT vector_version();
 
-# Retry policy for DB-locked operations
+# Retry policy for DB-locked operations (used by insert_chunk_vector_with_retry)
 DB_LOCK_RETRY_COUNT = 6
 DB_LOCK_RETRY_BASE_DELAY = 0.05  # seconds, exponential backoff multiplier
 
@@ -27,6 +27,9 @@ def connect_db(db_path: str, timeout: float = 30.0) -> sqlite3.Connection:
     """
     Create a database connection with appropriate timeout and settings.
     
+    DEPRECATED: Use db.connection.get_db_connection() instead.
+    This function is maintained for backward compatibility.
+    
     Args:
         db_path: Path to the SQLite database file
         timeout: Timeout in seconds for waiting on locks
@@ -34,14 +37,8 @@ def connect_db(db_path: str, timeout: float = 30.0) -> sqlite3.Connection:
     Returns:
         sqlite3.Connection object configured for vector operations
     """
-    # timeout instructs sqlite to wait up to `timeout` seconds for locks
-    conn = sqlite3.connect(db_path, timeout=timeout, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA busy_timeout = 30000;")  # 30s
-    except Exception:
-        pass
-    return conn
+    from .connection import get_db_connection
+    return get_db_connection(db_path, timeout=timeout, enable_vector=False)
 
 
 def load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:
@@ -163,30 +160,38 @@ def insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path:
 
     q_vec = json.dumps(vector)
 
-    attempt = 0
-    while True:
+    # Use retry decorator for the actual insert operation
+    @retry_on_exception(
+        exceptions=(sqlite3.OperationalError,),
+        max_retries=DB_LOCK_RETRY_COUNT,
+        base_delay=DB_LOCK_RETRY_BASE_DELAY,
+        exponential_backoff=True
+    )
+    def _insert_with_retry():
+        """Inner function with retry logic."""
+        # Check if it's a database locked error
         try:
-            # use vector_as_f32(json) as per API so extension formats blob
             cur.execute("INSERT INTO chunks (file_id, path, chunk_index, embedding) VALUES (?, ?, ?, vector_as_f32(?))",
-                        (file_id, path, chunk_index, q_vec))
+                       (file_id, path, chunk_index, q_vec))
             conn.commit()
             rowid = int(cur.lastrowid)
             logger.debug(f"Inserted chunk vector for {path} chunk {chunk_index}, rowid={rowid}")
             return rowid
         except sqlite3.OperationalError as e:
-            msg = str(e).lower()
-            if "database is locked" in msg and attempt < DB_LOCK_RETRY_COUNT:
-                attempt += 1
-                delay = DB_LOCK_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                logger.warning(f"Database locked, retrying in {delay}s (attempt {attempt}/{DB_LOCK_RETRY_COUNT})")
-                time.sleep(delay)
-                continue
-            else:
-                logger.error(f"Failed to insert chunk vector after {attempt} retries: {e}")
+            # Only retry on database locked errors
+            if "database is locked" not in str(e).lower():
+                logger.error(f"Failed to insert chunk vector: {e}")
                 raise RuntimeError(f"Failed to INSERT chunk vector (vector_as_f32 call): {e}") from e
+            raise  # Re-raise for retry decorator to handle
         except Exception as e:
             logger.error(f"Failed to insert chunk vector: {e}")
             raise RuntimeError(f"Failed to INSERT chunk vector (vector_as_f32 call): {e}") from e
+    
+    try:
+        return _insert_with_retry()
+    except sqlite3.OperationalError as e:
+        logger.error(f"Failed to insert chunk vector after {DB_LOCK_RETRY_COUNT} retries: {e}")
+        raise RuntimeError(f"Failed to INSERT chunk vector after retries: {e}") from e
 
 
 def search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
@@ -204,10 +209,11 @@ def search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) ->
     Raises:
         RuntimeError: If vector search operations fail
     """
+    from .connection import db_connection
+    
     logger.debug(f"Searching vectors in database: {database_path}, top_k={top_k}")
-    conn = connect_db(database_path)
-    try:
-        load_sqlite_vector_extension(conn)
+    
+    with db_connection(database_path, enable_vector=True) as conn:
         ensure_chunks_and_meta(conn)
 
         # Ensure vector index is initialized before searching
@@ -253,8 +259,6 @@ def search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) ->
                 score = float(distance)
             results.append({"file_id": int(file_id), "path": path, "chunk_index": int(chunk_index), "score": score})
         return results
-    finally:
-        conn.close()
 
 
 def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Optional[str]:
@@ -271,9 +275,9 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Option
         The chunk text, or None if not found
     """
     from .operations import get_project_metadata
+    from .connection import db_connection
     
-    conn = connect_db(database_path)
-    try:
+    with db_connection(database_path) as conn:
         cur = conn.cursor()
         # Get file path from database
         cur.execute("SELECT path FROM files WHERE id = ?", (file_id,))
@@ -337,5 +341,3 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Option
         start = chunk_index * step
         end = min(start + CHUNK_SIZE, len(content))
         return content[start:end]
-    finally:
-        conn.close()

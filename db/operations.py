@@ -7,6 +7,7 @@ import threading
 from utils.config import CFG  # config (keeps chunk_size etc if needed)
 from utils.logger import get_logger
 from utils.cache import project_cache, stats_cache, file_cache
+from utils.retry import retry_on_db_locked
 from .db_writer import get_writer
 
 _LOG = get_logger(__name__)
@@ -15,24 +16,18 @@ _LOG = get_logger(__name__)
 _PREPARED_STATEMENTS = {}
 _PREPARED_LOCK = threading.Lock()
 
-import threading
 
 # Simple connection helper: we open new connections per operation so the code is robust
 # across threads. We set WAL journal mode for safer concurrency.
 # Added a small timeout to avoid long blocking if DB is locked.
 def _get_connection(db_path: str) -> sqlite3.Connection:
-    dirname = os.path.dirname(os.path.abspath(db_path))
-    if dirname and not os.path.isdir(dirname):
-        os.makedirs(dirname, exist_ok=True)
-    # timeout in seconds for busy sqlite; small value to avoid long blocking in web requests
-    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=5.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA journal_mode = WAL;")
-    except Exception:
-        # Not fatal — continue
-        pass
-    return conn
+    """
+    DEPRECATED: Use db.connection.get_db_connection() instead.
+    This function is maintained for backward compatibility.
+    """
+    from .connection import get_db_connection
+    # Use shorter timeout for web requests (5s instead of default 30s)
+    return get_db_connection(db_path, timeout=5.0, enable_wal=True)
 
 
 def _get_prepared_statement(conn: sqlite3.Connection, query_key: str, sql: str):
@@ -392,24 +387,15 @@ def _ensure_projects_dir():
 
 
 def _retry_on_db_locked(func, *args, max_retries=DB_RETRY_COUNT, **kwargs):
-    """Retry a database operation if it's locked."""
-    import time
-    last_error = None
+    """
+    Retry a database operation if it's locked.
     
-    for attempt in range(max_retries):
-        try:
-            return func(*args, **kwargs)
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e).lower() and attempt < max_retries - 1:
-                last_error = e
-                time.sleep(DB_RETRY_DELAY * (2 ** attempt))  # Exponential backoff
-                continue
-            raise
-        except Exception as e:
-            raise
-    
-    if last_error:
-        raise last_error
+    DEPRECATED: Use @retry_on_db_locked decorator from utils.retry instead.
+    This function is maintained for backward compatibility.
+    """
+    # Use the retry decorator from utils.retry
+    decorated_func = retry_on_db_locked(max_retries=max_retries, base_delay=DB_RETRY_DELAY)(func)
+    return decorated_func(*args, **kwargs)
 
 
 def _get_project_id(project_path: str) -> str:
