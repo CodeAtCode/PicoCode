@@ -224,10 +224,6 @@ def _process_file_sync(
             saved_count = 0
             failed_count = 0
             for idx, chunk_doc, future, embedding_start_time in embedding_futures:
-                chunk_text = chunk_doc.text
-                chunk_size = len(chunk_text)
-                chunk_preview = chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
-                
                 try:
                     emb = future.result(timeout=EMBEDDING_TIMEOUT)  # Add timeout to prevent hanging indefinitely
                     embedding_duration = time.time() - embedding_start_time
@@ -271,6 +267,11 @@ def _process_file_sync(
                         f"  - The future.result() call timed out after {EMBEDDING_TIMEOUT}s",
                         f"  - This means the worker thread did not complete the embedding request in time",
                         f"  - Check logs above for messages from the worker thread (search for 'Worker thread')",
+                        f"  - Embedding API state:",
+                        f"    - API URL: {_embedding_client.api_url}",
+                        f"    - Model: {_embedding_client.model}",
+                        f"    - API timeout: {_embedding_client.timeout}s",
+                        f"    - Max retries: {_embedding_client.max_retries}",
                         f"  - The embedding API logs will show the actual HTTP request state"
                     ])
                     
