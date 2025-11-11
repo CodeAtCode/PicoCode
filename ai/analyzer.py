@@ -86,7 +86,6 @@ def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, fil
     semaphore.acquire()
     try:
         _thread_state.stage = "calling_embed_text"
-        # Removed verbose debug logs for each chunk embedding
         result = _embedding_client.embed_text(text, file_path=file_path, chunk_index=chunk_index)
         _thread_state.stage = "completed"
         return result
@@ -157,10 +156,7 @@ def _process_file_sync(
         
         # Check if file needs reindexing (incremental mode)
         if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
-            # Removed verbose debug log for skipped files
             return {"stored": False, "embedded": False, "skipped": True}
-
-        # Removed per-file processing log to reduce verbosity - progress is logged periodically
 
         # store file (synchronous DB writer) with metadata
         try:
@@ -277,15 +273,12 @@ def _process_file_sync(
                         embedded_any = True
                     except Exception as e:
                         failed_count += 1
-                        # Log error instead of printing to reduce clutter
                         logger.error(f"Failed to insert chunk vector for {rel_path} chunk {idx}: {e}")
                 else:
-                    # Removed verbose debug log for skipping chunks
                     pass
 
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
-        # Log error instead of printing to reduce clutter
         logger.exception("Failed to process file %s", rel_path)
         return {"stored": False, "embedded": False, "skipped": False}
 
@@ -427,7 +420,6 @@ def analyze_local_path_sync(
                 "meta",
             )
         except Exception:
-            # Ignore failure to store non-critical metadata
             pass
 
     except Exception:
