@@ -7,7 +7,6 @@ import logging
 import traceback
 import threading
 from openai import OpenAI
-import requests
 
 from utils.config import CFG
 
@@ -117,6 +116,7 @@ class EmbeddingClient:
     """
     Embedding client with detailed logging, retry logic, and configurable timeouts.
     Provides better debugging for embedding API failures.
+    Uses OpenAI SDK for proper API compatibility.
     """
     def __init__(self,
                  api_url: Optional[str] = None,
@@ -131,30 +131,34 @@ class EmbeddingClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.backoff = backoff
-        self.session = requests.Session()
-        if self.api_key:
-            self.session.headers.update({"Authorization": f"Bearer {self.api_key}"})
-        self.session.headers.update({"Content-Type": "application/json"})
+        
+        # Use OpenAI SDK client instead of raw requests
+        # The SDK automatically handles the /embeddings path
+        self.client = _client
 
-    def _generate_curl_command(self, url: str, headers: Dict[str, str], payload: Dict[str, Any]) -> str:
+    def _generate_curl_command(self, payload: Dict[str, Any]) -> str:
         """
         Generate a curl command for debugging purposes.
         Masks the API key for security.
         """
+        # Construct the full embeddings URL
+        base_url = self.api_url.rstrip('/')
+        if not base_url.endswith('/embeddings'):
+            url = f"{base_url}/embeddings"
+        else:
+            url = base_url
+        
         # Start with basic curl command
         curl_parts = ["curl", "-X", "POST", f"'{url}'"]
         
-        # Add headers
+        # Add standard headers
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer <API_KEY_MASKED>"
+        }
+        
         for key, value in headers.items():
-            if key.lower() == "authorization" and value:
-                # Mask the API key for security
-                if value.startswith("Bearer "):
-                    masked_value = f"Bearer <API_KEY_MASKED>"
-                else:
-                    masked_value = "<API_KEY_MASKED>"
-                curl_parts.append(f"-H '{key}: {masked_value}'")
-            else:
-                curl_parts.append(f"-H '{key}: {value}'")
+            curl_parts.append(f"-H '{key}: {value}'")
         
         # Add data payload
         payload_json = json.dumps(payload)
@@ -225,7 +229,7 @@ class EmbeddingClient:
 
     def embed_text(self, text: str, file_path: str = "<unknown>", chunk_index: int = 0) -> List[float]:
         """
-        Embed a single chunk of text. Returns the embedding vector.
+        Embed a single chunk of text using OpenAI SDK. Returns the embedding vector.
         Raises EmbeddingError on failure.
         """
         request_id = str(uuid.uuid4())
@@ -243,75 +247,41 @@ class EmbeddingClient:
             attempt += 1
             start = time.perf_counter()
             try:
-                resp = self.session.post(
-                    self.api_url,
-                    data=json.dumps(payload),
-                    timeout=self.timeout,
+                # Use OpenAI SDK for embeddings
+                resp = self.client.embeddings.create(
+                    model=self.model,
+                    input=text,
+                    timeout=self.timeout
                 )
                 elapsed = time.perf_counter() - start
 
-                # Try to parse JSON safely
-                try:
-                    resp_json = resp.json()
-                except Exception:
-                    resp_json = None
+                # Log successful response
+                self._log_request_end(request_id, elapsed, 200, "Success")
 
-                preview = ""
-                if resp_json is not None:
-                    preview = json.dumps(resp_json)[:1000]
+                # Extract embedding from response
+                # The SDK returns a response object with a data list
+                if resp and hasattr(resp, 'data') and len(resp.data) > 0:
+                    embedding = resp.data[0].embedding
+                    if embedding and isinstance(embedding, list):
+                        _embedding_logger.info(
+                            "Embedding succeeded",
+                            extra={"request_id": request_id, "file": file_path, "chunk_index": chunk_index},
+                        )
+                        return embedding
+                    else:
+                        raise EmbeddingError(f"Invalid embedding format in response")
                 else:
-                    preview = (resp.text or "")[:1000]
+                    raise EmbeddingError(f"Unexpected embedding response shape from SDK")
 
-                self._log_request_end(request_id, elapsed, resp.status_code, preview)
-
-                if resp.status_code >= 200 and resp.status_code < 300:
-                    # expected format: {"data": [{"embedding": [...]}], ...}
-                    if not resp_json:
-                        raise EmbeddingError(f"Empty JSON response (status={resp.status_code})")
-                    try:
-                        # tolerant extraction
-                        data = resp_json.get("data") if isinstance(resp_json, dict) else None
-                        if data and isinstance(data, list) and len(data) > 0:
-                            emb = data[0].get("embedding")
-                            if emb and isinstance(emb, list):
-                                _embedding_logger.info(
-                                    "Embedding succeeded",
-                                    extra={"request_id": request_id, "file": file_path, "chunk_index": chunk_index},
-                                )
-                                return emb
-                        # Fallback: maybe top-level "embedding" key
-                        if isinstance(resp_json, dict) and "embedding" in resp_json:
-                            emb = resp_json["embedding"]
-                            if isinstance(emb, list):
-                                return emb
-                        raise EmbeddingError(f"Unexpected embedding response shape: {resp_json}")
-                    except KeyError as e:
-                        raise EmbeddingError(f"Missing keys in embedding response: {e}")
-                else:
-                    # Non-2xx
-                    _embedding_logger.warning(
-                        "Embedding API returned non-2xx",
-                        extra={
-                            "request_id": request_id,
-                            "status_code": resp.status_code,
-                            "file": file_path,
-                            "chunk_index": chunk_index,
-                            "attempt": attempt,
-                            "body_preview": preview,
-                        },
-                    )
-                    # fall through to retry logic
-                    err_msg = f"Status {resp.status_code}: {preview}"
-
-            except requests.Timeout as e:
+            except Exception as e:
                 elapsed = time.perf_counter() - start
-                err_msg = f"Timeout after {elapsed:.2f}s: {e}"
+                err_msg = f"Error after {elapsed:.2f}s: {e}"
                 
-                # Save to bash script in /tmp if DEBUG is enabled
+                # Save debug information for timeout or API errors
                 script_path = None
                 if CFG.get("debug"):
                     # Generate curl command for debugging
-                    curl_command = self._generate_curl_command(self.api_url, dict(self.session.headers), payload)
+                    curl_command = self._generate_curl_command(payload)
                     script_path = self._save_curl_script(curl_command, request_id, file_path, chunk_index)
                     if script_path:
                         _embedding_logger.error(f"\nDebug script saved to: {script_path}")
@@ -321,24 +291,16 @@ class EmbeddingClient:
                         _embedding_logger.error(curl_command)
                 
                 _embedding_logger.error(
-                    "Embedding API Timeout",
+                    "Embedding API Error",
                     extra={
                         "request_id": request_id,
                         "error": str(e),
                         "elapsed_s": elapsed,
-                        "curl_command": curl_command,
-                        "debug_script": script_path
+                        "attempt": attempt,
+                        "file": file_path,
+                        "chunk_index": chunk_index,
                     }
                 )
-                
-            except requests.RequestException as e:
-                elapsed = time.perf_counter() - start
-                err_msg = f"RequestException after {elapsed:.2f}s: {e}\n{traceback.format_exc()}"
-                _embedding_logger.error("Embedding request exception", extra={"request_id": request_id, "error": err_msg})
-            except Exception as e:
-                elapsed = time.perf_counter() - start
-                err_msg = f"Unexpected error after {elapsed:.2f}s: {e}\n{traceback.format_exc()}"
-                _embedding_logger.exception("Unexpected embedding exception", extra={"request_id": request_id})
 
             # Retry logic
             if attempt > self.max_retries:
