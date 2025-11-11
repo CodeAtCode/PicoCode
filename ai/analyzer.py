@@ -210,7 +210,7 @@ def _process_file_sync(
                     if embedding_duration > 5.0:
                         logger.warning(f"Slow embedding API response for {rel_path} chunk {idx}: {embedding_duration:.2f}s total")
                 except concurrent.futures.TimeoutError:
-                    logger.error(f"Embedding API timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx}")
+                    logger.error(f"Embedding API timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx} - The embedding request did not complete within {EMBEDDING_TIMEOUT}s. This may indicate network issues, API overload, or the chunk being too large.")
                     emb = None
                     failed_count += 1
                 except Exception as e:
@@ -241,10 +241,13 @@ def _process_file_sync(
                             print(err_content)
                         except Exception:
                             logger.exception("Failed to write chunk-insert error to disk for %s chunk %d", rel_path, idx)
+                else:
+                    logger.debug(f"Skipping chunk {idx} for {rel_path} - no embedding vector available")
             
             # Log batch completion with timing and status
             batch_duration = time.time() - batch_start_time
-            logger.info(f"Completed batch {batch_num}/{num_batches} for {rel_path}: {saved_count} saved, {failed_count} failed, {batch_duration:.2f}s elapsed")
+            batch_status = "FAILED" if failed_count > 0 and saved_count == 0 else ("PARTIAL" if failed_count > 0 else "SUCCESS")
+            logger.info(f"Batch {batch_num}/{num_batches} for {rel_path} - Status: {batch_status} - {saved_count} saved, {failed_count} failed, {batch_duration:.2f}s elapsed")
 
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
