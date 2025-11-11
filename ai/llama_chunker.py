@@ -6,6 +6,11 @@ from typing import List
 from llama_index.core.node_parser import CodeSplitter, SentenceSplitter
 from llama_index.core.schema import Document
 
+try:
+    import tree_sitter_language_pack as tslp
+except ImportError:
+    tslp = None
+
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -29,11 +34,13 @@ def chunk_with_llama_index(
     Returns:
         List of text chunks
     """
-    # Map language names to llama-index language identifiers
+    # Map language names to tree-sitter-language-pack identifiers
     language_map = {
         "python": "python",
-        "javascript": "js",
-        "typescript": "ts",
+        "javascript": "javascript",
+        "js": "javascript",
+        "typescript": "typescript",
+        "ts": "typescript",
         "java": "java",
         "go": "go",
         "rust": "rust",
@@ -47,12 +54,22 @@ def chunk_with_llama_index(
         llama_lang = language_map.get(language.lower())
         
         if llama_lang:
+            # Create parser using tree_sitter_language_pack if available
+            parser = None
+            if tslp is not None:
+                try:
+                    parser = tslp.get_parser(llama_lang)
+                    logger.debug(f"Created parser for language: {llama_lang}")
+                except Exception as e:
+                    logger.warning(f"Could not create parser for {llama_lang}: {e}")
+            
             # Use CodeSplitter for code
             splitter = CodeSplitter(
                 language=llama_lang,
                 chunk_lines=40,  # Target lines per chunk (approximation)
                 chunk_lines_overlap=5,  # Overlap in lines
-                max_chars=chunk_size
+                max_chars=chunk_size,
+                parser=parser  # Pass parser explicitly to avoid tree_sitter_languages dependency
             )
             logger.debug(f"Using CodeSplitter for language: {llama_lang}")
         else:
