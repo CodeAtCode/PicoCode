@@ -53,7 +53,7 @@ jobs:
       - name: Upload diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: ci-diagnostics
+          name: ci-diagnostics-java-${{ matrix.java-version }}
           path: out/ci-diagnostics.txt
 
       - name: Full build with stacktrace (capture to file)
@@ -66,7 +66,7 @@ jobs:
       - name: Upload build log
         uses: actions/upload-artifact@v4
         with:
-          name: gradle-build-log
+          name: gradle-build-log-java-${{ matrix.java-version }}
           path: gradle-build.log
 
       - name: Build Kotlin plugin subproject if present
@@ -88,7 +88,7 @@ jobs:
       - name: Upload kotlin-subproject/build logs if present
         uses: actions/upload-artifact@v4
         with:
-          name: kotlin-subproject-logs
+          name: kotlin-subproject-logs-java-${{ matrix.java-version }}
           path: |
             kotlin-subproject-build.log
             assemble.log
