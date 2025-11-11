@@ -42,4 +42,7 @@ CFG = {
     "file_watcher_enabled": _bool_env("FILE_WATCHER_ENABLED", True),
     "file_watcher_interval": _int_env("FILE_WATCHER_INTERVAL", 10),
     "file_watcher_debounce": _int_env("FILE_WATCHER_DEBOUNCE", 5),
+    
+    # Debug configuration
+    "debug": _bool_env("DEBUG", False),
 }
