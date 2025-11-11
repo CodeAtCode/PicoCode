@@ -48,7 +48,7 @@ jobs:
       - name: Run diagnostics script (prints wrapper and kotlin plugin references)
         run: |
           mkdir -p out
-          scripts/ci/inspect_gradle_kotlin_versions.sh > out/ci-diagnostics.txt || true
+          ide-plugins/inspect_gradle_kotlin_versions.sh > out/ci-diagnostics.txt || true
       - name: Upload diagnostics
         uses: actions/upload-artifact@v4
         with:
