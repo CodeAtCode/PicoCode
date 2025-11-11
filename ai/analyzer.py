@@ -263,16 +263,27 @@ def _process_file_sync(
                     else:
                         diagnostic_info.append(f"  - Future status: Pending/Unknown")
                     
+                    # Generate curl command for debugging
+                    try:
+                        payload = {
+                            "model": _embedding_client.model,
+                            "input": chunk_doc.text,
+                        }
+                        curl_command = _embedding_client._generate_curl_command(
+                            _embedding_client.api_url,
+                            dict(_embedding_client.session.headers),
+                            payload
+                        )
+                    except Exception as e:
+                        curl_command = f"Failed to generate curl command: {e}"
+                    
                     diagnostic_info.extend([
                         f"  - The future.result() call timed out after {EMBEDDING_TIMEOUT}s",
-                        f"  - This means the worker thread did not complete the embedding request in time",
-                        f"  - Check logs above for messages from the worker thread (search for 'Worker thread')",
                         f"  - Embedding API state:",
-                        f"    - API URL: {_embedding_client.api_url}",
-                        f"    - Model: {_embedding_client.model}",
                         f"    - API timeout: {_embedding_client.timeout}s",
                         f"    - Max retries: {_embedding_client.max_retries}",
-                        f"  - The embedding API logs will show the actual HTTP request state"
+                        f"  - Curl command to reproduce:",
+                        f"{curl_command}"
                     ])
                     
                     logger.error("\n".join(diagnostic_info))
