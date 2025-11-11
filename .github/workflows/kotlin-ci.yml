@@ -1,0 +1,97 @@
+name: 'CI — Build Kotlin plugin on PR commits'
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-kotlin-plugin:
+    name: 'Build (matrix: Java ${{ matrix.java-version }})'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        java-version: [11, 17]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java-version }}
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ide-plugins/.gradle
+          key: gradle-${{ matrix.java-version }}-${{ hashFiles('ide-plugins/**/*.gradle*','ide-plugins/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ matrix.java-version }}-
+
+      - name: Make wrapper executable
+        run: chmod +x ./gradlew
+        working-directory: ide-plugins
+
+      - name: Print Gradle info (for debugging)
+        run: ./gradlew --no-daemon --version
+        working-directory: ide-plugins
+
+      - name: Run diagnostics script (prints wrapper and kotlin plugin references)
+        run: |
+          mkdir -p ../out
+          ./inspect_gradle_kotlin_versions.sh > ../out/ci-diagnostics.txt || true
+        working-directory: ide-plugins
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-java-${{ matrix.java-version }}
+          path: out/ci-diagnostics.txt
+
+      - name: Full build with stacktrace (capture to file)
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
+        run: |
+          set -o pipefail
+          ./gradlew build --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log || true
+        working-directory: ide-plugins
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log-java-${{ matrix.java-version }}
+          path: gradle-build.log
+
+      - name: Build Kotlin plugin subproject if present
+        run: |
+          set -o pipefail
+          if ./gradlew :kotlin:tasks --dry-run &>/dev/null; then
+            echo "Detected :kotlin subproject -> building it"
+            ./gradlew :kotlin:build --no-daemon --stacktrace 2>&1 | tee ../kotlin-subproject-build.log || true
+            echo "Uploading kotlin-subproject-build.log"
+            ls -la ../kotlin-subproject-build.log || true
+          elif ./gradlew :plugin:kotlin:tasks --dry-run &>/dev/null; then
+            echo "Detected :plugin:kotlin subproject -> building it"
+            ./gradlew :plugin:kotlin:build --no-daemon --stacktrace 2>&1 | tee ../kotlin-subproject-build.log || true
+          else
+            echo "No explicit kotlin plugin subproject found; running assemble on all projects"
+            ./gradlew assemble --no-daemon --stacktrace 2>&1 | tee ../assemble.log || true
+          fi
+        working-directory: ide-plugins
+      - name: Upload kotlin-subproject/build logs if present
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-subproject-logs-java-${{ matrix.java-version }}
+          path: |
+            kotlin-subproject-build.log
+            assemble.log
+        if: always()
