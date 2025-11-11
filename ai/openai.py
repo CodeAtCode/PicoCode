@@ -122,7 +122,7 @@ class EmbeddingClient:
                  api_url: Optional[str] = None,
                  api_key: Optional[str] = None,
                  model: Optional[str] = None,
-                 timeout: float = 30.0,
+                 timeout: float = 15.0,
                  max_retries: int = 2,
                  backoff: float = 1.5):
         self.api_url = api_url or CFG.get("api_url")
