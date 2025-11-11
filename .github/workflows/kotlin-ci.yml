@@ -34,21 +34,24 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-            .gradle
-          key: gradle-${{ matrix.java-version }}-${{ hashFiles('**/*.gradle*','**/gradle-wrapper.properties') }}
+            ide-plugins/.gradle
+          key: gradle-${{ matrix.java-version }}-${{ hashFiles('ide-plugins/**/*.gradle*','ide-plugins/**/gradle-wrapper.properties') }}
           restore-keys: |
             gradle-${{ matrix.java-version }}-
 
       - name: Make wrapper executable
         run: chmod +x ./gradlew
+        working-directory: ide-plugins
 
       - name: Print Gradle info (for debugging)
         run: ./gradlew --no-daemon --version
+        working-directory: ide-plugins
 
       - name: Run diagnostics script (prints wrapper and kotlin plugin references)
         run: |
-          mkdir -p out
-          ide-plugins/inspect_gradle_kotlin_versions.sh > out/ci-diagnostics.txt || true
+          mkdir -p ../out
+          ./inspect_gradle_kotlin_versions.sh > ../out/ci-diagnostics.txt || true
+        working-directory: ide-plugins
       - name: Upload diagnostics
         uses: actions/upload-artifact@v4
         with:
@@ -60,7 +63,8 @@ jobs:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
         run: |
           set -o pipefail
-          ./gradlew build --no-daemon --stacktrace 2>&1 | tee gradle-build.log || true
+          ./gradlew build --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log || true
+        working-directory: ide-plugins
       - name: Upload build log
         uses: actions/upload-artifact@v4
         with:
@@ -72,16 +76,17 @@ jobs:
           set -o pipefail
           if ./gradlew :kotlin:tasks --dry-run &>/dev/null; then
             echo "Detected :kotlin subproject -> building it"
-            ./gradlew :kotlin:build --no-daemon --stacktrace 2>&1 | tee kotlin-subproject-build.log || true
+            ./gradlew :kotlin:build --no-daemon --stacktrace 2>&1 | tee ../kotlin-subproject-build.log || true
             echo "Uploading kotlin-subproject-build.log"
-            ls -la kotlin-subproject-build.log || true
+            ls -la ../kotlin-subproject-build.log || true
           elif ./gradlew :plugin:kotlin:tasks --dry-run &>/dev/null; then
             echo "Detected :plugin:kotlin subproject -> building it"
-            ./gradlew :plugin:kotlin:build --no-daemon --stacktrace 2>&1 | tee kotlin-subproject-build.log || true
+            ./gradlew :plugin:kotlin:build --no-daemon --stacktrace 2>&1 | tee ../kotlin-subproject-build.log || true
           else
             echo "No explicit kotlin plugin subproject found; running assemble on all projects"
-            ./gradlew assemble --no-daemon --stacktrace 2>&1 | tee assemble.log || true
+            ./gradlew assemble --no-daemon --stacktrace 2>&1 | tee ../assemble.log || true
           fi
+        working-directory: ide-plugins
       - name: Upload kotlin-subproject/build logs if present
         uses: actions/upload-artifact@v4
         with:
