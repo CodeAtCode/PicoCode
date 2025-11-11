@@ -390,11 +390,13 @@ def analyze_local_path_sync(
         
         try:
             # Use batch update for efficiency - single database transaction
+            # Store total_files for performance (avoid re-scanning directory on every request)
             set_project_metadata_batch(database_path, {
                 "last_indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "last_index_duration": str(duration),
                 "files_indexed": str(file_count),
-                "files_skipped": str(skipped_count)
+                "files_skipped": str(skipped_count),
+                "total_files": str(total_files)  # Store total files found during indexing
             })
         except Exception:
             logger.exception("Failed to store indexing metadata")
