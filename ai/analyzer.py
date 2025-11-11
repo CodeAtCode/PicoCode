@@ -203,11 +203,6 @@ def _process_file_sync(
             failed_count = 0
             for idx, chunk_doc, future, embedding_start_time in embedding_futures:
                 try:
-                    # Check if request is already slow before waiting for result
-                    elapsed_before_result = time.time() - embedding_start_time
-                    if elapsed_before_result > 3.0:
-                        logger.warning(f"Embedding API request taking too long for {rel_path} chunk {idx}: {elapsed_before_result:.2f}s elapsed, still waiting for response...")
-                    
                     emb = future.result(timeout=EMBEDDING_TIMEOUT)  # Add timeout to prevent hanging indefinitely
                     embedding_duration = time.time() - embedding_start_time
                     

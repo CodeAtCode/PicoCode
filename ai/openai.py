@@ -307,13 +307,18 @@ class EmbeddingClient:
                 elapsed = time.perf_counter() - start
                 err_msg = f"Timeout after {elapsed:.2f}s: {e}"
                 
-                # Generate curl command for debugging
-                curl_command = self._generate_curl_command(self.api_url, dict(self.session.headers), payload)
-                
                 # Save to bash script in /tmp if DEBUG is enabled
                 script_path = None
                 if CFG.get("debug"):
+                    # Generate curl command for debugging
+                    curl_command = self._generate_curl_command(self.api_url, dict(self.session.headers), payload)
                     script_path = self._save_curl_script(curl_command, request_id, file_path, chunk_index)
+                    if script_path:
+                        _embedding_logger.error(f"\nDebug script saved to: {script_path}")
+                        _embedding_logger.error(f"Run with: bash {script_path}")
+                    else:
+                        _embedding_logger.error(f"\nDebug with this curl command:")
+                        _embedding_logger.error(curl_command)
                 
                 _embedding_logger.error(
                     "Embedding API Timeout",
@@ -326,18 +331,6 @@ class EmbeddingClient:
                     }
                 )
                 
-                # Print to console for easy debugging
-                print(f"\n{'='*80}")
-                print(f"Embedding request timed out after {elapsed:.2f}s")
-                print(f"Request ID: {request_id}")
-                print(f"File: {file_path}, Chunk: {chunk_index}")
-                if script_path:
-                    print(f"\nDebug script saved to: {script_path}")
-                    print(f"Run with: bash {script_path}")
-                else:
-                    print(f"\nDebug with this curl command:")
-                    print(curl_command)
-                print(f"{'='*80}\n")
             except requests.RequestException as e:
                 elapsed = time.perf_counter() - start
                 err_msg = f"RequestException after {elapsed:.2f}s: {e}\n{traceback.format_exc()}"

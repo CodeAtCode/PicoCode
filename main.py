@@ -91,6 +91,10 @@ async def lifespan(app: FastAPI):
                 os.unlink(tmp_db_path)
             except Exception:
                 pass
+
+        if CFG.get("debug"):
+            logger.info("✓ debug enabled")
+
     except Exception as e:
         logger.error(f"FATAL: Failed to load sqlite-vector extension at startup: {e}")
         # Force immediate exit - cannot continue without vector extension
