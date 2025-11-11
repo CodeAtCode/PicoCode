@@ -269,11 +269,7 @@ def _process_file_sync(
                             "model": _embedding_client.model,
                             "input": chunk_doc.text,
                         }
-                        curl_command = _embedding_client._generate_curl_command(
-                            _embedding_client.api_url,
-                            dict(_embedding_client.session.headers),
-                            payload
-                        )
+                        curl_command = _embedding_client._generate_curl_command(payload)
                     except Exception as e:
                         curl_command = f"Failed to generate curl command: {e}"
                     
