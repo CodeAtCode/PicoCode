@@ -2,9 +2,9 @@
 
 # PicoCode - Local Codebase Assistant
 
-> 🤖 **Note**: This project was fully generated and developed using GitHub Copilot, demonstrating the power of AI-assisted development.
+> 🤖 **Note**: This project was fully generated and developed using GitHub Copilot.
 
-<img src="https://github.com/user-attachments/assets/146f5fd1-45cf-4164-b981-635e0db3b791" />
+<img src="https://github.com/user-attachments/assets/a6dc6647-309a-4103-864a-e4cec94b7962" />
 
 Are you looking for a simple way to asks question to your codebase using the inference provider you want without to be locked to a specific service?
 This tool is a way to achieve this!
