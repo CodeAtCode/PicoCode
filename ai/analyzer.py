@@ -52,10 +52,15 @@ EMBEDDING_CONCURRENCY = 4
 # Increase batch size for parallel processing
 EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
 PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
-EMBEDDING_TIMEOUT = 30  # Timeout in seconds for each embedding API call
+# Timeout for future.result() must account for retries: (max_retries + 1) × SDK_timeout + buffer
+# With SDK timeout of 15s and max_retries=2, this allows 3 × 15s = 45s + 15s buffer = 60s
+EMBEDDING_TIMEOUT = 60  # Timeout in seconds for each embedding API call (including retries)
 FILE_PROCESSING_TIMEOUT = 300  # Timeout in seconds for processing a single file (5 minutes)
-_THREADPOOL_WORKERS = max(16, EMBEDDING_CONCURRENCY + 8)
-_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_THREADPOOL_WORKERS)
+
+_FILE_EXECUTOR_WORKERS = 4
+_EMBEDDING_EXECUTOR_WORKERS = 4
+_FILE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_FILE_EXECUTOR_WORKERS)
+_EMBEDDING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_EMBEDDING_EXECUTOR_WORKERS)
 
 logger = get_logger(__name__)
 
@@ -217,7 +222,7 @@ def _process_file_sync(
             for idx, chunk_doc in batch:
                 # Submit task to executor; semaphore will be acquired inside the worker
                 embedding_start_time = time.time()
-                future = _EXECUTOR.submit(_get_embedding_with_semaphore, semaphore, chunk_doc.text, rel_path, idx, embedding_model)
+                future = _EMBEDDING_EXECUTOR.submit(_get_embedding_with_semaphore, semaphore, chunk_doc.text, rel_path, idx, embedding_model)
                 embedding_futures.append((idx, chunk_doc, future, embedding_start_time))
 
             # Wait for batch to complete and store results
@@ -397,7 +402,7 @@ def analyze_local_path_sync(
                     counters[0] += 1
                     file_num = counters[0]
                 
-                fut = _EXECUTOR.submit(
+                fut = _FILE_EXECUTOR.submit(
                     _process_file_sync,
                     semaphore,
                     database_path,
