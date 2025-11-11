@@ -202,6 +202,10 @@ def _process_file_sync(
             saved_count = 0
             failed_count = 0
             for idx, chunk_doc, future, embedding_start_time in embedding_futures:
+                chunk_text = chunk_doc.text
+                chunk_size = len(chunk_text)
+                chunk_preview = chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
+                
                 try:
                     emb = future.result(timeout=EMBEDDING_TIMEOUT)  # Add timeout to prevent hanging indefinitely
                     embedding_duration = time.time() - embedding_start_time
@@ -210,7 +214,17 @@ def _process_file_sync(
                     if embedding_duration > 5.0:
                         logger.warning(f"Slow embedding API response for {rel_path} chunk {idx}: {embedding_duration:.2f}s total")
                 except concurrent.futures.TimeoutError:
-                    logger.error(f"Embedding API timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx} - The embedding request did not complete within {EMBEDDING_TIMEOUT}s. This may indicate network issues, API overload, or the chunk being too large.")
+                    elapsed = time.time() - embedding_start_time
+                    logger.error(
+                        f"Future timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx}:\n"
+                        f"  - Elapsed time: {elapsed:.2f}s\n"
+                        f"  - Chunk size: {chunk_size} characters\n"
+                        f"  - Chunk preview: {chunk_preview!r}\n"
+                        f"  - Future state: {future._state if hasattr(future, '_state') else 'unknown'}\n"
+                        f"  - The future.result() call timed out waiting for the embedding API.\n"
+                        f"  - The embedding request may still be running in the background thread.\n"
+                        f"  - Check logs above for 'Embedding API Timeout' messages from the worker thread."
+                    )
                     emb = None
                     failed_count += 1
                 except Exception as e:
