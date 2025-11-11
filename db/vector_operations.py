@@ -21,7 +21,6 @@ SQLITE_VECTOR_VERSION_FN = "vector_version"      # SELECT vector_version();
 # Retry policy for DB-locked operations
 DB_LOCK_RETRY_COUNT = 6
 DB_LOCK_RETRY_BASE_DELAY = 0.05  # seconds, exponential backoff multiplier
-_sqlite_vector_loaded = False
 
 
 def connect_db(db_path: str, timeout: float = 30.0) -> sqlite3.Connection:
@@ -53,26 +52,19 @@ def load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:
     CRITICAL: This function will ALWAYS crash the program if the extension fails to load.
     STRICT mode is mandatory and cannot be disabled.
     
+    NOTE: SQLite extensions are loaded per-connection, not per-process. This function must be
+    called for each connection that needs vector operations.
+    
     Args:
         conn: SQLite database connection
         
     Raises:
         RuntimeError: If the extension fails to load
     """
-    global _sqlite_vector_loaded
-
-    if _sqlite_vector_loaded:
-        logger.debug("sqlite-vector: already loaded in-process, skipping load.")
-        return
-
     try:
         ext_path = importlib.resources.files(SQLITE_VECTOR_PKG) / SQLITE_VECTOR_RESOURCE
         conn.load_extension(str(ext_path))
-        _sqlite_vector_loaded = True
-        try:
-            conn.enable_load_extension(False)
-        except Exception:
-            pass
+        logger.debug(f"sqlite-vector extension loaded for connection {id(conn)}")
         # optional quick check: call vector_version()
         try:
             cur = conn.execute(f"SELECT {SQLITE_VECTOR_VERSION_FN}()")
