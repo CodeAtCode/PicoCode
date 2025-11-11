@@ -69,8 +69,6 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global _file_watcher
     
-    # Test sqlite-vector extension loading at startup
-    logger.info("Testing sqlite-vector extension loading...")
     try:
         from db.vector_operations import connect_db, load_sqlite_vector_extension
         

@@ -126,7 +126,6 @@ class FileWatcher:
             daemon=False
         )
         self._thread.start()
-        self.logger.info("FileWatcher started")
     
     def stop(self, timeout: float = 5.0) -> None:
         """
@@ -212,7 +211,6 @@ class FileWatcher:
         
         Periodically checks watched directories for changes.
         """
-        self.logger.info("FileWatcher loop started")
         
         while not self._stop_event.is_set():
             try:
@@ -222,8 +220,6 @@ class FileWatcher:
             
             # Wait for the interval or until stop is signaled
             self._stop_event.wait(timeout=self.check_interval)
-        
-        self.logger.info("FileWatcher loop exited")
     
     def _check_all_projects(self) -> None:
         """Check all watched projects for changes."""

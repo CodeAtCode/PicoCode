@@ -51,8 +51,6 @@
         <div class="card">
           <div class="card-body">
             <h5 class="card-title">Configuration</h5>
-            <p class="mb-1"><strong>Host:</strong> {{ config.get("uvicorn_host", "127.0.0.1") }} <strong>Port:</strong> {{ config.get("uvicorn_port", 8000) }}</p>
-            <p class="mb-1"><strong>Local path:</strong> {{ config.get("local_path") or "not set" }}</p>
             <p class="mb-1"><strong>Embedding:</strong> {{ config.get("embedding_model") or "not set" }}</p>
             <p class="mb-0"><strong>Coding:</strong> {{ config.get("coding_model") or "not set" }}</p>
 
@@ -66,15 +64,14 @@
           <div class="card-body">
             <h5 class="card-title">Add New Project</h5>
             <div class="mb-2">
-              <label for="new_project_path" class="form-label">Project Path</label>
+              <label for="new_project_path" class="form-label">Project Path <em>(absolute path)</em></label>
               <input type="text" id="new_project_path" class="form-control form-control-sm" placeholder="/path/to/your/project">
-              <small class="text-muted">Absolute path to the project directory</small>
             </div>
             <div class="mb-2">
               <label for="new_project_name" class="form-label">Project Name (optional)</label>
               <input type="text" id="new_project_name" class="form-control form-control-sm" placeholder="My Project">
             </div>
-            <button id="createProjectBtn" class="btn btn-success w-100" type="button">Create & Index Project</button>
+            <button id="createProjectBtn" class="btn btn-success w-100" type="button">Create & Index another Project</button>
           </div>
         </div>
 
