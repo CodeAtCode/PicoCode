@@ -1,4 +1,7 @@
-# Instructions
+# Repository assistant instructions
+
+Primary rule
+- Do not run automated security scans (for example: CodeQL, semgrep, trivy, or any other static analysis / code-scanning tools) unless a repository maintainer or the repository owner explicitly requests and authorizes the scan.
 
 Purpose
 - Help contributors and code-assistants make focused, minimal, and correct changes to the codebase.
@@ -7,12 +10,12 @@ Purpose
 General guidance
 - Always write and explain code in English.
 - When adding comments in code, limit them to describing implementation details and intent. Do not use comments to introduce new features or design changes.
-- Avoid implementing security checks or validations unless the maintainer explicitly requests them.
+- Avoid implementing security scans, checks or validations unless the maintainer explicitly requests them.
 - Do not create or modify test files; tests and migrations are not to be generated.
 - All changes that interact with persistent data (database reads/writes/migrations) must be implemented inside the repository's existing database modules or clearly designated DB files (e.g., app/db.py, app/database/, or equivalent). Do not embed DB operations in handlers, controllers, or utility files unless that is the project's established pattern.
 
 Python-specific guidance
-- Follow PEP 8 formatting and idiomatic Python practices (use typing where helpful), ignore linting tools from py.
+- Follow PEP 8 formatting and idiomatic Python practices (use typing where helpful), ignore linting tools from pyproject.toml.
 - Keep functions and modules small and focused.
 - Prefer composing behavior via modules and functions already present in the repo rather than adding new top-level packages or modules unless necessary.
 - Use existing configuration and dependency-loading patterns in the project; do not introduce new secrets or env-loading systems.
