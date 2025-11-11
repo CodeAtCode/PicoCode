@@ -28,6 +28,7 @@ class SearchService:
     ) -> Dict[str, Any]:
         """
         Perform semantic search on a project.
+        Content is always included as it's required for the coding model.
         
         Args:
             project_id: Project identifier
@@ -36,7 +37,7 @@ class SearchService:
             use_cache: Whether to use result caching
         
         Returns:
-            Dictionary with results, project_id, and query
+            Dictionary with results (including content), project_id, and query
         
         Raises:
             ValueError: If project not found or not indexed
@@ -53,15 +54,10 @@ class SearchService:
         if stats.get("file_count", 0) == 0:
             raise ValueError(f"Project not indexed: {project_id}")
         
-        # Check cache
-        if use_cache:
-            cache_key = SearchService._make_cache_key(project_id, query, top_k)
-            cached = search_cache.get(cache_key)
-            if cached is not None:
-                logger.debug(f"Cache hit for query: {query[:50]}")
-                return cached
+        # Note: Caching disabled for now since content makes results large
+        # Future: could cache without content and retrieve content on demand
         
-        # Perform search
+        # Perform search (always includes content)
         try:
             results = search_semantic(query, db_path, top_k=top_k)
             
@@ -71,10 +67,6 @@ class SearchService:
                 "query": query,
                 "count": len(results)
             }
-            
-            # Cache results
-            if use_cache:
-                search_cache.set(cache_key, response)
             
             logger.info(f"Search completed: {len(results)} results for '{query[:50]}'")
             return response

@@ -33,12 +33,14 @@ def api_query(http_request: Request, request: QueryRequest):
     Performs semantic search using vector embeddings:
     - Generates embedding for query
     - Finds most similar code chunks
-    - Returns ranked results with scores
+    - Returns ranked results with scores and content
+    
+    Note: Content is always included as it's needed for the coding model.
     
     Rate limit: 100 requests per minute per IP.
     
     Returns:
-    - **results**: Array of matching code chunks
+    - **results**: Array of matching code chunks with content
     - **project_id**: Project identifier
     - **query**: Original query text
     """

@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PicoCode - Local Codebase Assistant</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.0.0/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <style>
     body { padding-top: 1.5rem; padding-bottom: 3rem; background:#f7f9fb; }
     .chat-window { height: 62vh; overflow:auto; padding:.75rem; background:#ffffff; border:1px solid #e9ecef; border-radius:8px; }
@@ -19,6 +23,13 @@
     .spinner-small { width:1rem; height:1rem; border:2px solid rgba(0,0,0,0.12); border-top-color:#0d6efd; border-radius:50%; animation:spin 1s linear infinite; }
     @keyframes spin { to { transform:rotate(360deg); } }
     .context-list { font-family:monospace; font-size:.85rem; color:#333; }
+    .context-item { margin-bottom: 1rem; padding: 0.75rem; background: #f8f9fa; border-left: 3px solid #0d6efd; border-radius: 4px; }
+    .context-item-header { font-weight: bold; margin-bottom: 0.5rem; color: #0d6efd; }
+    .context-item-content { font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; background: #ffffff; padding: 0.5rem; border-radius: 4px; max-height: 200px; overflow-y: auto; }
+    .markdown-content { line-height: 1.6; }
+    .markdown-content pre { background: #f6f8fa; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+    .markdown-content code { background: #f6f8fa; padding: 0.2em 0.4em; border-radius: 3px; font-size: 85%; }
+    .markdown-content pre code { background: transparent; padding: 0; }
     .controls-area { display:flex; gap:.5rem; align-items:center; }
     .empty-state { height:62vh; display:flex; align-items:center; justify-content:center; color:#6c757d; }
     .btn-sm-icon { padding:.25rem .5rem; font-size:.85rem; }
@@ -53,6 +64,22 @@
 
         <div class="card mt-3">
           <div class="card-body">
+            <h5 class="card-title">Add New Project</h5>
+            <div class="mb-2">
+              <label for="new_project_path" class="form-label">Project Path</label>
+              <input type="text" id="new_project_path" class="form-control form-control-sm" placeholder="/path/to/your/project">
+              <small class="text-muted">Absolute path to the project directory</small>
+            </div>
+            <div class="mb-2">
+              <label for="new_project_name" class="form-label">Project Name (optional)</label>
+              <input type="text" id="new_project_name" class="form-control form-control-sm" placeholder="My Project">
+            </div>
+            <button id="createProjectBtn" class="btn btn-success w-100" type="button">Create & Index Project</button>
+          </div>
+        </div>
+
+        <div class="card mt-3">
+          <div class="card-body">
             <h5 class="card-title">Projects</h5>
             {% if projects %}
               <ul class="list-group list-group-flush" id="projectsList">
@@ -66,11 +93,12 @@
                       </small>
                       <br>
                       <small class="text-muted indexing-info" style="display:none;">
-                        Files: <span class="file-count">0</span> | Embeddings: <span class="embedding-count">0</span>
+                        Indexed: <span class="file-count">0</span>/<span class="total-files">?</span> files | <span class="embedding-count">0</span> chunks
                       </small>
                     </div>
                     <div class="d-flex gap-1">
-                      <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="{{ p.id }}" title="Re-index project">⟳</button>
+                      <button type="button" class="btn btn-sm btn-outline-success continue-index-btn" data-project-id="{{ p.id }}" title="Continue indexing (incremental)">+</button>
+                      <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="{{ p.id }}" title="Re-index project (full)">⟳</button>
                       <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="{{ p.id }}" title="Delete project">×</button>
                     </div>
                   </li>
@@ -127,6 +155,20 @@
   </div>
 
   <script>
+    // Configure marked for markdown rendering
+    marked.setOptions({
+      highlight: function(code, lang) {
+        if (lang && hljs.getLanguage(lang)) {
+          try {
+            return hljs.highlight(code, { language: lang }).value;
+          } catch (err) {}
+        }
+        return hljs.highlightAuto(code).value;
+      },
+      breaks: true,
+      gfm: true
+    });
+
     const chatWindow = document.getElementById("chatWindow");
     const userPrompt = document.getElementById("userPrompt");
     const sendBtn = document.getElementById("sendBtn");
@@ -134,6 +176,12 @@
     const loadingIndicator = document.getElementById("loadingIndicator");
     
     let chatHistory = JSON.parse(localStorage.getItem("picocode_chat_history") || "[]");
+
+    function renderMarkdown(text) {
+      // Parse markdown and sanitize HTML
+      const rawHtml = marked.parse(text);
+      return DOMPurify.sanitize(rawHtml);
+    }
 
     function renderChat() {
       if (chatHistory.length === 0) {
@@ -149,15 +197,29 @@
         let content = `
           <div class="card">
             <div class="card-body">
-              <div>${escapeHtml(msg.text)}</div>
         `;
         
+        // Render message text as markdown for assistant, plain text for user
+        if (msg.role === 'assistant') {
+          content += `<div class="markdown-content">${renderMarkdown(msg.text)}</div>`;
+        } else {
+          content += `<div>${escapeHtml(msg.text)}</div>`;
+        }
+        
         if (msg.context && msg.context.length > 0) {
-          content += '<div class="context-list mt-2"><strong>Context:</strong><ul class="mb-0">';
+          content += '<div class="mt-3"><strong>Files Used:</strong></div>';
+          content += '<div class="context-list">';
           msg.context.forEach(c => {
-            content += `<li>${escapeHtml(c.path)} (${c.score.toFixed(4)})</li>`;
+            content += `
+              <div class="context-item">
+                <div class="context-item-header">
+                  📄 ${escapeHtml(c.path)} 
+                  <span class="badge bg-primary">${c.score.toFixed(4)}</span>
+                </div>
+              </div>
+            `;
           });
-          content += '</ul></div>';
+          content += '</div>';
         }
         
         content += `
@@ -171,6 +233,11 @@
       });
       
       chatWindow.scrollTop = chatWindow.scrollHeight;
+      
+      // Apply syntax highlighting to any code blocks
+      chatWindow.querySelectorAll('pre code').forEach((block) => {
+        hljs.highlightElement(block);
+      });
     }
 
     function escapeHtml(text) {
@@ -248,6 +315,71 @@
       }
     });
 
+    // Handle creating new project
+    document.getElementById("createProjectBtn").addEventListener("click", async () => {
+      const projectPath = document.getElementById("new_project_path").value.trim();
+      const projectName = document.getElementById("new_project_name").value.trim();
+      
+      if (!projectPath) {
+        alert("Please enter a project path");
+        return;
+      }
+      
+      try {
+        // First, create the project
+        const createResponse = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            path: projectPath,
+            name: projectName || null
+          })
+        });
+        
+        if (!createResponse.ok) {
+          const data = await createResponse.json();
+          alert(`Failed to create project: ${data.error || 'Unknown error'}`);
+          return;
+        }
+        
+        const project = await createResponse.json();
+        const projectId = project.id;
+        
+        // Then, start indexing
+        const indexResponse = await fetch('/api/projects/index', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            project_id: projectId,
+            incremental: true
+          })
+        });
+        
+        if (indexResponse.ok) {
+          alert(`Project created and indexing started!\nProject ID: ${projectId}`);
+          // Clear form
+          document.getElementById("new_project_path").value = "";
+          document.getElementById("new_project_name").value = "";
+          // Reload page to show new project
+          window.location.reload();
+        } else {
+          const data = await indexResponse.json();
+          alert(`Project created but indexing failed: ${data.error || 'Unknown error'}`);
+          window.location.reload();
+        }
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      }
+    });
+
+    // Allow Enter key to create project
+    document.getElementById("new_project_path").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        document.getElementById("createProjectBtn").click();
+      }
+    });
+
     // Highlight selected project
     document.querySelectorAll(".project-item").forEach(li => {
       li.addEventListener("click", () => {
@@ -288,14 +420,16 @@
               if (details.indexing_stats) {
                 const indexingInfo = item.querySelector('.indexing-info');
                 const fileCount = item.querySelector('.file-count');
+                const totalFiles = item.querySelector('.total-files');
                 const embeddingCount = item.querySelector('.embedding-count');
                 
-                if (indexingInfo && fileCount && embeddingCount) {
+                if (indexingInfo && fileCount && totalFiles && embeddingCount) {
                   fileCount.textContent = details.indexing_stats.file_count || 0;
+                  totalFiles.textContent = details.indexing_stats.total_files || '?';
                   embeddingCount.textContent = details.indexing_stats.embedding_count || 0;
                   
                   // Show stats if project has been indexed
-                  if (details.indexing_stats.file_count > 0) {
+                  if (details.indexing_stats.file_count > 0 || details.indexing_stats.total_files > 0) {
                     indexingInfo.style.display = 'block';
                   } else {
                     indexingInfo.style.display = 'none';
@@ -314,10 +448,11 @@
 
     // Handle project re-indexing
     document.addEventListener('click', async (e) => {
-      if (e.target.classList.contains('reindex-project-btn')) {
+      // Handle continue indexing (incremental)
+      if (e.target.classList.contains('continue-index-btn')) {
         const projectId = e.target.getAttribute('data-project-id');
         
-        if (!confirm('Re-index this project? This will refresh all embeddings.')) {
+        if (!confirm('Continue indexing this project? This will only index new or modified files.')) {
           return;
         }
         
@@ -325,12 +460,47 @@
           const response = await fetch('/api/projects/index', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ project_id: projectId })
+            body: JSON.stringify({ 
+              project_id: projectId,
+              incremental: true 
+            })
           });
           
           if (response.ok) {
             const data = await response.json();
-            alert(`Re-indexing started. Status: ${data.status}`);
+            alert(`Incremental indexing started. Status: ${data.status}`);
+            // Reload page to show updated status
+            window.location.reload();
+          } else {
+            const data = await response.json();
+            alert(`Failed to start indexing: ${data.error || 'Unknown error'}`);
+          }
+        } catch (err) {
+          alert(`Error starting indexing: ${err.message}`);
+        }
+      }
+      
+      // Handle full re-indexing
+      if (e.target.classList.contains('reindex-project-btn')) {
+        const projectId = e.target.getAttribute('data-project-id');
+        
+        if (!confirm('Re-index this project completely? This will re-process all files.')) {
+          return;
+        }
+        
+        try {
+          const response = await fetch('/api/projects/index', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              project_id: projectId,
+              incremental: false 
+            })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            alert(`Full re-indexing started. Status: ${data.status}`);
             // Reload page to show updated status
             window.location.reload();
           } else {

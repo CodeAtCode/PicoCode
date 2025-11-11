@@ -12,6 +12,7 @@ class CreateProjectRequest(BaseModel):
 
 class IndexProjectRequest(BaseModel):
     project_id: str
+    incremental: Optional[bool] = True  # Default to incremental indexing
 
 
 class QueryRequest(BaseModel):

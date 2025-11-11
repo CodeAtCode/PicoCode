@@ -15,14 +15,14 @@ from db.vector_operations import (
     load_sqlite_vector_extension as _load_sqlite_vector_extension,
     ensure_chunks_and_meta as _ensure_chunks_and_meta,
     insert_chunk_vector_with_retry as _insert_chunk_vector_with_retry,
-    search_vectors as _search_vectors,
     get_chunk_text as _get_chunk_text,
 )
-from .openai import call_coding_api, EmbeddingClient
+from .openai import call_coding_api
+from .llama_embeddings import OpenAICompatibleEmbedding
+from .llama_chunker import chunk_with_llama_index
 from llama_index.core import Document
 from utils.logger import get_logger
-from utils import compute_file_hash, chunk_text, norm, cosine
-from .smart_chunker import smart_chunk
+from utils import compute_file_hash, norm, cosine
 import logging
 
 # reduce noise from httpx used by external libs
@@ -64,8 +64,8 @@ _EMBEDDING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_EMBEDDI
 
 logger = get_logger(__name__)
 
-# Initialize EmbeddingClient for structured logging and retry logic
-_embedding_client = EmbeddingClient()
+# Initialize llama-index embedding client
+_embedding_client = OpenAICompatibleEmbedding()
 
 # Thread-local storage to track execution state inside futures
 _thread_state = threading.local()
@@ -86,7 +86,8 @@ def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, fil
     semaphore.acquire()
     try:
         _thread_state.stage = "calling_embed_text"
-        result = _embedding_client.embed_text(text, file_path=file_path, chunk_index=chunk_index)
+        # Use llama-index embedding client
+        result = _embedding_client._get_text_embedding(text)
         _thread_state.stage = "completed"
         return result
     except Exception as e:
@@ -171,14 +172,8 @@ def _process_file_sync(
         if isinstance(cfg, dict):
             embedding_model = cfg.get("embedding_model")
 
-        # Use smart chunking for supported code languages
-        use_smart_chunking = cfg.get("smart_chunking", True) if isinstance(cfg, dict) else True
-        supported_languages = ["python", "javascript", "typescript", "java", "go", "rust", "c", "cpp"]
-        
-        if use_smart_chunking and lang in supported_languages:
-            chunks = smart_chunk(content, language=lang, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
-        else:
-            chunks = chunk_text(content, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        # Use llama-index chunking for all content
+        chunks = chunk_with_llama_index(content, language=lang, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         
         if not chunks:
             chunks = [content]
@@ -395,11 +390,13 @@ def analyze_local_path_sync(
         
         try:
             # Use batch update for efficiency - single database transaction
+            # Store total_files for performance (avoid re-scanning directory on every request)
             set_project_metadata_batch(database_path, {
                 "last_indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "last_index_duration": str(duration),
                 "files_indexed": str(file_count),
-                "files_skipped": str(skipped_count)
+                "files_skipped": str(skipped_count),
+                "total_files": str(total_files)  # Store total files found during indexing
             })
         except Exception:
             logger.exception("Failed to store indexing metadata")
@@ -442,16 +439,40 @@ def analyze_local_path_background(local_path: str, database_path: str, venv_path
 
 def search_semantic(query: str, database_path: str, top_k: int = 5):
     """
-    Uses sqlite-vector's vector_full_scan to retrieve best-matching chunks and returns
-    a list of {file_id, path, chunk_index, score}.
+    Uses llama-index with sqlite-vector backend to retrieve best-matching chunks.
+    Always includes content as it's needed for the coding model context.
+    
+    Args:
+        query: Search query text
+        database_path: Path to the SQLite database
+        top_k: Number of results to return
+        
+    Returns:
+        List of dicts with file_id, path, chunk_index, score, and content
     """
-    q_emb = _embedding_client.embed_text(query, file_path="<query>", chunk_index=0)
-    if not q_emb:
-        return []
-
     try:
-        return _search_vectors(database_path, q_emb, top_k=top_k)
-    except Exception:
+        # Use llama-index for semantic search
+        from .llama_integration import llama_index_search
+        
+        docs = llama_index_search(query, database_path, top_k=top_k)
+        
+        results = []
+        for doc in docs:
+            metadata = doc.metadata or {}
+            result = {
+                "file_id": metadata.get("file_id", 0),
+                "path": metadata.get("path", ""),
+                "chunk_index": metadata.get("chunk_index", 0),
+                "score": metadata.get("score", 0.0),
+                "content": doc.text or ""  # Always include content for LLM context
+            }
+            results.append(result)
+        
+        logger.info(f"llama-index search returned {len(results)} results")
+        return results
+        
+    except Exception as e:
+        logger.exception(f"Semantic search failed: {e}")
         raise
 
 

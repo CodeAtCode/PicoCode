@@ -104,13 +104,20 @@ def api_get_project(project_id: str):
         
         # Add indexing statistics if project has a database
         db_path = project.get("database_path")
+        
         if db_path and os.path.exists(db_path):
             try:
-                from db.operations import get_project_stats
+                from db.operations import get_project_stats, get_project_metadata
                 stats = get_project_stats(db_path)
+                
+                # Get total files from metadata (stored during indexing for performance)
+                total_files_str = get_project_metadata(db_path, "total_files")
+                total_files = int(total_files_str) if total_files_str else 0
+                
                 project["indexing_stats"] = {
                     "file_count": stats.get("file_count", 0),
                     "embedding_count": stats.get("embedding_count", 0),
+                    "total_files": total_files,
                     "is_indexed": stats.get("file_count", 0) > 0
                 }
             except Exception as e:
@@ -118,12 +125,14 @@ def api_get_project(project_id: str):
                 project["indexing_stats"] = {
                     "file_count": 0,
                     "embedding_count": 0,
+                    "total_files": 0,
                     "is_indexed": False
                 }
         else:
             project["indexing_stats"] = {
                 "file_count": 0,
                 "embedding_count": 0,
+                "total_files": 0,
                 "is_indexed": False
             }
         
@@ -160,11 +169,12 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
     Index or re-index a project in the background.
     
     - **project_id**: Unique project identifier
+    - **incremental**: If True (default), only index new/changed files. If False, re-index all files.
     
     Starts background indexing process:
     - Scans project directory for code files
     - Generates embeddings for semantic search
-    - Uses incremental indexing (skips unchanged files)
+    - Uses incremental indexing by default (skips unchanged files)
     
     Rate limit: 10 requests per minute per IP.
     
@@ -195,20 +205,31 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
         # Update status to indexing
         update_project_status(request.project_id, "indexing")
         
-        # Start background indexing
+        # Start background indexing with incremental flag
         venv_path = CFG.get("venv_path")
+        incremental = request.incremental if request.incremental is not None else True
         
         def index_callback():
             try:
-                analyze_local_path_background(project_path, db_path, venv_path, MAX_FILE_SIZE, CFG)
+                from ai.analyzer import analyze_local_path_sync
+                # Use sync version directly with incremental flag
+                analyze_local_path_sync(project_path, db_path, venv_path, MAX_FILE_SIZE, CFG, incremental=incremental)
                 update_project_status(request.project_id, "ready", datetime.utcnow().isoformat())
             except Exception as e:
+                logger.exception(f"Indexing failed for project {request.project_id}: {e}")
                 update_project_status(request.project_id, "error")
                 raise
         
         background_tasks.add_task(index_callback)
         
-        return JSONResponse({"status": "indexing", "project_id": request.project_id})
+        indexing_type = "incremental" if incremental else "full"
+        logger.info(f"Started {indexing_type} indexing for project {request.project_id}")
+        
+        return JSONResponse({
+            "status": "indexing", 
+            "project_id": request.project_id,
+            "incremental": incremental
+        })
     except Exception as e:
         logger.exception(f"Error starting project indexing: {e}")
         return JSONResponse({"error": "Failed to start indexing"}, status_code=500)

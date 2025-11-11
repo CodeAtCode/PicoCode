@@ -184,24 +184,51 @@ async def code_endpoint(request: Request):
     # If RAG requested, perform semantic search and build context
     if use_rag:
         try:
+            # Retrieve with content (always included)
             retrieved = search_semantic(prompt, database_path, top_k=top_k)
-            # Build context WITHOUT including snippets: only include file references and scores
+            # Build context WITH actual file content for better RAG results
             context_parts = []
             total_len = len(combined_context)
             for r in retrieved:
-                part = f"File: {r.get('path')} (score: {r.get('score', 0):.4f})\n"
+                content = r.get("content", "")
+                path = r.get("path", "")
+                score = r.get("score", 0)
+                
+                # Include file path, score, and actual content
+                part = f"File: {path} (score: {score:.4f})\n{content}\n"
+                
                 if total_len + len(part) > TOTAL_CONTEXT_LIMIT:
+                    # If full content doesn't fit, try to include at least partial content
+                    remaining = TOTAL_CONTEXT_LIMIT - total_len
+                    if remaining > 200:  # Only include if we have meaningful space
+                        truncated_content = content[:remaining - 100] + "..."
+                        part = f"File: {path} (score: {score:.4f})\n{truncated_content}\n"
+                        context_parts.append(part)
+                        used_context.append({
+                            "path": path, 
+                            "score": score,
+                            "file_id": r.get("file_id"),
+                            "chunk_index": r.get("chunk_index")
+                        })
                     break
+                
                 context_parts.append(part)
                 total_len += len(part)
-                used_context.append({"path": r.get("path"), "score": r.get("score")})
+                used_context.append({
+                    "path": path, 
+                    "score": score,
+                    "file_id": r.get("file_id"),
+                    "chunk_index": r.get("chunk_index")
+                })
+            
             if context_parts:
-                retrieved_text = "\n".join(context_parts)
+                retrieved_text = "\n---\n".join(context_parts)
                 if combined_context:
-                    combined_context = combined_context + "\n\nRetrieved:\n" + retrieved_text
+                    combined_context = combined_context + "\n\nRetrieved Context:\n" + retrieved_text
                 else:
-                    combined_context = "Retrieved:\n" + retrieved_text
-        except Exception:
+                    combined_context = "Retrieved Context:\n" + retrieved_text
+        except Exception as e:
+            logger.exception(f"RAG search failed: {e}")
             used_context = []
 
     # Call the coding model with prompt and combined_context
