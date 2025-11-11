@@ -9,9 +9,12 @@ import os
 import sys
 import tempfile
 import uvicorn
+import signal
+import atexit
 
 from db import operations as db_operations
 from db.operations import get_or_create_project
+from db.db_writer import stop_all_writers
 from utils.config import CFG
 from utils.logger import get_logger
 from endpoints.project_endpoints import router as project_router
@@ -23,6 +26,42 @@ logger = get_logger(__name__)
 
 # Global FileWatcher instance
 _file_watcher = None
+
+
+def cleanup_on_exit():
+    """Cleanup function called on exit or error."""
+    global _file_watcher
+    
+    logger.info("Cleaning up resources...")
+    
+    # Stop FileWatcher
+    if _file_watcher:
+        try:
+            _file_watcher.stop(timeout=2.0)
+            _file_watcher = None
+            logger.info("FileWatcher stopped")
+        except Exception as e:
+            logger.error(f"Error stopping FileWatcher: {e}")
+    
+    # Stop all database writers
+    try:
+        stop_all_writers()
+        logger.info("Database writers stopped")
+    except Exception as e:
+        logger.error(f"Error stopping database writers: {e}")
+
+
+def signal_handler(signum, frame):
+    """Handle termination signals."""
+    logger.info(f"Received signal {signum}, shutting down...")
+    cleanup_on_exit()
+    sys.exit(0)
+
+
+# Register cleanup handlers
+atexit.register(cleanup_on_exit)
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 
 @asynccontextmanager
@@ -96,7 +135,8 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Stop FileWatcher on shutdown
+    # Cleanup is handled by atexit and signal handlers
+    # Just ensure FileWatcher stops gracefully here
     if _file_watcher:
         try:
             _file_watcher.stop()

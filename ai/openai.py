@@ -136,6 +136,68 @@ class EmbeddingClient:
             self.session.headers.update({"Authorization": f"Bearer {self.api_key}"})
         self.session.headers.update({"Content-Type": "application/json"})
 
+    def _generate_curl_command(self, url: str, headers: Dict[str, str], payload: Dict[str, Any]) -> str:
+        """
+        Generate a curl command for debugging purposes.
+        Masks the API key for security.
+        """
+        # Start with basic curl command
+        curl_parts = ["curl", "-X", "POST", f"'{url}'"]
+        
+        # Add headers
+        for key, value in headers.items():
+            if key.lower() == "authorization" and value:
+                # Mask the API key for security
+                if value.startswith("Bearer "):
+                    masked_value = f"Bearer <API_KEY_MASKED>"
+                else:
+                    masked_value = "<API_KEY_MASKED>"
+                curl_parts.append(f"-H '{key}: {masked_value}'")
+            else:
+                curl_parts.append(f"-H '{key}: {value}'")
+        
+        # Add data payload
+        payload_json = json.dumps(payload)
+        # Escape single quotes in the JSON for shell compatibility
+        payload_json_escaped = payload_json.replace("'", "'\\''")
+        curl_parts.append(f"-d '{payload_json_escaped}'")
+        
+        return " \\\n  ".join(curl_parts)
+
+    def _save_curl_script(self, curl_command: str, request_id: str, file_path: str, chunk_index: int) -> Optional[str]:
+        """
+        Save curl command to a bash script in /tmp for debugging.
+        Returns the path to the generated script, or None if save failed.
+        """
+        try:
+            import tempfile
+            # Create a unique filename based on request_id
+            script_name = f"embedding_debug_{request_id[:8]}.sh"
+            script_path = os.path.join("/tmp", script_name)
+            
+            # Generate script content with shebang and comments
+            script_content = f"""#!/bin/bash
+# Embedding request debug script
+# Request ID: {request_id}
+# File: {file_path}
+# Chunk: {chunk_index}
+# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
+
+{curl_command}
+"""
+            
+            with open(script_path, 'w') as f:
+                f.write(script_content)
+            
+            # Make the script executable
+            os.chmod(script_path, 0o755)
+            
+            return script_path
+        except Exception as e:
+            _embedding_logger.warning(f"Failed to save curl debug script: {e}")
+            return None
+
+
     def _log_request_start(self, request_id: str, file_path: str, chunk_index: int, chunk_len: int):
         _embedding_logger.debug(
             "Embedding request START",
@@ -244,7 +306,38 @@ class EmbeddingClient:
             except requests.Timeout as e:
                 elapsed = time.perf_counter() - start
                 err_msg = f"Timeout after {elapsed:.2f}s: {e}"
-                _embedding_logger.error("Embedding API Timeout", extra={"request_id": request_id, "error": str(e)})
+                
+                # Generate curl command for debugging
+                curl_command = self._generate_curl_command(self.api_url, dict(self.session.headers), payload)
+                
+                # Save to bash script in /tmp if DEBUG is enabled
+                script_path = None
+                if CFG.get("debug"):
+                    script_path = self._save_curl_script(curl_command, request_id, file_path, chunk_index)
+                
+                _embedding_logger.error(
+                    "Embedding API Timeout",
+                    extra={
+                        "request_id": request_id,
+                        "error": str(e),
+                        "elapsed_s": elapsed,
+                        "curl_command": curl_command,
+                        "debug_script": script_path
+                    }
+                )
+                
+                # Print to console for easy debugging
+                print(f"\n{'='*80}")
+                print(f"Embedding request timed out after {elapsed:.2f}s")
+                print(f"Request ID: {request_id}")
+                print(f"File: {file_path}, Chunk: {chunk_index}")
+                if script_path:
+                    print(f"\nDebug script saved to: {script_path}")
+                    print(f"Run with: bash {script_path}")
+                else:
+                    print(f"\nDebug with this curl command:")
+                    print(curl_command)
+                print(f"{'='*80}\n")
             except requests.RequestException as e:
                 elapsed = time.perf_counter() - start
                 err_msg = f"RequestException after {elapsed:.2f}s: {e}\n{traceback.format_exc()}"
