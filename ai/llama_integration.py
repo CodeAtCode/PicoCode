@@ -67,20 +67,3 @@ def llama_index_search(query: str, database_path: str, top_k: int = 5) -> List[D
         return []
 
 
-def llama_index_retrieve_documents(query: str, database_path: str, top_k: int = 5, 
-                                   search_func=None, get_chunk_func=None) -> List[Document]:
-    """
-    Legacy function - now redirects to llama_index_search.
-    
-    Args:
-        query: Search query text
-        database_path: Path to project database
-        top_k: Number of results to return
-        search_func: Deprecated - not used
-        get_chunk_func: Deprecated - not used
-    
-    Returns:
-        List of Document objects with chunk text and metadata
-    """
-    return llama_index_search(query, database_path, top_k)
-

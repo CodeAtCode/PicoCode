@@ -15,7 +15,6 @@ from db.vector_operations import (
     load_sqlite_vector_extension as _load_sqlite_vector_extension,
     ensure_chunks_and_meta as _ensure_chunks_and_meta,
     insert_chunk_vector_with_retry as _insert_chunk_vector_with_retry,
-    search_vectors as _search_vectors,
     get_chunk_text as _get_chunk_text,
 )
 from .openai import call_coding_api, EmbeddingClient
