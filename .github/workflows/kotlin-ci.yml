@@ -1,4 +1,4 @@
-name: "CI — Build Kotlin plugin on PR commits"
+name: CI — Build Kotlin plugin on PR commits
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-kotlin-plugin:
-    name: "Build (matrix: Java ${{ matrix.java-version }})"
+    name: Build (matrix: Java ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -38,10 +38,9 @@ jobs:
             gradle-${{ matrix.java-version }}-
 
       - name: Make wrapper executable
-        run: chmod +x ide-plugins/gradlew
+        run: chmod +x ./gradlew
 
       - name: Print Gradle info (for debugging)
-        working-directory: ide-plugins
         run: ./gradlew --no-daemon --version
 
       - name: Run diagnostics script (prints wrapper and kotlin plugin references)
@@ -55,7 +54,6 @@ jobs:
           path: out/ci-diagnostics.txt
 
       - name: Full build with stacktrace (capture to file)
-        working-directory: ide-plugins
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
         run: |
@@ -65,10 +63,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gradle-build-log
-          path: ide-plugins/gradle-build.log
+          path: gradle-build.log
 
       - name: Build Kotlin plugin subproject if present
-        working-directory: ide-plugins
         run: |
           set -o pipefail
           if ./gradlew :kotlin:tasks --dry-run &>/dev/null; then
@@ -88,6 +85,6 @@ jobs:
         with:
           name: kotlin-subproject-logs
           path: |
-            ide-plugins/kotlin-subproject-build.log
-            ide-plugins/assemble.log
+            kotlin-subproject-build.log
+            assemble.log
             || true
