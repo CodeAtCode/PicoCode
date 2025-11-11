@@ -1,4 +1,4 @@
-name: CI — Build Kotlin plugin on PR commits
+name: 'CI — Build Kotlin plugin on PR commits'
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-kotlin-plugin:
-    name: Build (matrix: Java ${{ matrix.java-version }})
+    name: 'Build (matrix: Java ${{ matrix.java-version }})'
     runs-on: ubuntu-latest
     strategy:
       matrix:
