@@ -57,13 +57,8 @@ PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
 EMBEDDING_TIMEOUT = 60  # Timeout in seconds for each embedding API call (including retries)
 FILE_PROCESSING_TIMEOUT = 300  # Timeout in seconds for processing a single file (5 minutes)
 
-# Separate executors to avoid deadlock:
-# - File executor: runs _process_file_sync tasks (one per file)
-# - Embedding executor: runs _get_embedding_with_semaphore tasks (multiple per file)
-# Without separation, all file threads can block waiting for embedding results that can't run
-# because all threads are occupied by file tasks.
-_FILE_EXECUTOR_WORKERS = 16
-_EMBEDDING_EXECUTOR_WORKERS = max(16, EMBEDDING_CONCURRENCY + 8)
+_FILE_EXECUTOR_WORKERS = 4
+_EMBEDDING_EXECUTOR_WORKERS = 4
 _FILE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_FILE_EXECUTOR_WORKERS)
 _EMBEDDING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_EMBEDDING_EXECUTOR_WORKERS)
 
