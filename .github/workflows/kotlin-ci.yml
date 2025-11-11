@@ -1,4 +1,4 @@
-name: 'CI — Build Kotlin plugin on PR commits'
+name: CI — Build Kotlin plugin on PR commits
 
 on:
   pull_request:
@@ -8,10 +8,8 @@ on:
 
 jobs:
   build-kotlin-plugin:
-    name: 'Build (matrix: Java ${{ matrix.java-version }})'
+    name: Build (matrix: Java ${{ matrix.java-version }})
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     strategy:
       matrix:
         java-version: [11, 17]
@@ -34,28 +32,25 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-            ide-plugins/.gradle
-          key: gradle-${{ matrix.java-version }}-${{ hashFiles('ide-plugins/**/*.gradle*','ide-plugins/**/gradle-wrapper.properties') }}
+            .gradle
+          key: gradle-${{ matrix.java-version }}-${{ hashFiles('**/*.gradle*','**/gradle-wrapper.properties') }}
           restore-keys: |
             gradle-${{ matrix.java-version }}-
 
       - name: Make wrapper executable
         run: chmod +x ./gradlew
-        working-directory: ide-plugins
 
       - name: Print Gradle info (for debugging)
         run: ./gradlew --no-daemon --version
-        working-directory: ide-plugins
 
       - name: Run diagnostics script (prints wrapper and kotlin plugin references)
         run: |
-          mkdir -p ../out
-          ./inspect_gradle_kotlin_versions.sh > ../out/ci-diagnostics.txt || true
-        working-directory: ide-plugins
+          mkdir -p out
+          scripts/ci/inspect_gradle_kotlin_versions.sh > out/ci-diagnostics.txt || true
       - name: Upload diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: ci-diagnostics-java-${{ matrix.java-version }}
+          name: ci-diagnostics
           path: out/ci-diagnostics.txt
 
       - name: Full build with stacktrace (capture to file)
@@ -63,12 +58,11 @@ jobs:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
         run: |
           set -o pipefail
-          ./gradlew build --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log || true
-        working-directory: ide-plugins
+          ./gradlew build --no-daemon --stacktrace 2>&1 | tee gradle-build.log || true
       - name: Upload build log
         uses: actions/upload-artifact@v4
         with:
-          name: gradle-build-log-java-${{ matrix.java-version }}
+          name: gradle-build-log
           path: gradle-build.log
 
       - name: Build Kotlin plugin subproject if present
@@ -76,22 +70,21 @@ jobs:
           set -o pipefail
           if ./gradlew :kotlin:tasks --dry-run &>/dev/null; then
             echo "Detected :kotlin subproject -> building it"
-            ./gradlew :kotlin:build --no-daemon --stacktrace 2>&1 | tee ../kotlin-subproject-build.log || true
+            ./gradlew :kotlin:build --no-daemon --stacktrace 2>&1 | tee kotlin-subproject-build.log || true
             echo "Uploading kotlin-subproject-build.log"
-            ls -la ../kotlin-subproject-build.log || true
+            ls -la kotlin-subproject-build.log || true
           elif ./gradlew :plugin:kotlin:tasks --dry-run &>/dev/null; then
             echo "Detected :plugin:kotlin subproject -> building it"
-            ./gradlew :plugin:kotlin:build --no-daemon --stacktrace 2>&1 | tee ../kotlin-subproject-build.log || true
+            ./gradlew :plugin:kotlin:build --no-daemon --stacktrace 2>&1 | tee kotlin-subproject-build.log || true
           else
             echo "No explicit kotlin plugin subproject found; running assemble on all projects"
-            ./gradlew assemble --no-daemon --stacktrace 2>&1 | tee ../assemble.log || true
+            ./gradlew assemble --no-daemon --stacktrace 2>&1 | tee assemble.log || true
           fi
-        working-directory: ide-plugins
       - name: Upload kotlin-subproject/build logs if present
         uses: actions/upload-artifact@v4
         with:
-          name: kotlin-subproject-logs-java-${{ matrix.java-version }}
+          name: kotlin-subproject-logs
           path: |
             kotlin-subproject-build.log
             assemble.log
-        if: always()
+            || true
