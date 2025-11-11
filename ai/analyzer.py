@@ -62,17 +62,39 @@ logger = get_logger(__name__)
 # Initialize EmbeddingClient for structured logging and retry logic
 _embedding_client = EmbeddingClient()
 
+# Thread-local storage to track execution state inside futures
+_thread_state = threading.local()
+
 
 def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, file_path: str = "<unknown>", chunk_index: int = 0, model: Optional[str] = None):
     """
     Wrapper to acquire semaphore inside executor task to avoid deadlock.
     The semaphore is acquired in the worker thread, not the main thread.
+    Tracks execution state for debugging timeout issues.
     """
+    # Initialize thread state tracking
+    _thread_state.stage = "acquiring_semaphore"
+    _thread_state.file_path = file_path
+    _thread_state.chunk_index = chunk_index
+    _thread_state.start_time = time.time()
+    
     semaphore.acquire()
     try:
-        return _embedding_client.embed_text(text, file_path=file_path, chunk_index=chunk_index)
+        _thread_state.stage = "calling_embed_text"
+        logger.debug(f"Worker thread starting embed_text for {file_path} chunk {chunk_index}")
+        result = _embedding_client.embed_text(text, file_path=file_path, chunk_index=chunk_index)
+        _thread_state.stage = "completed"
+        logger.debug(f"Worker thread completed embed_text for {file_path} chunk {chunk_index}")
+        return result
+    except Exception as e:
+        _thread_state.stage = f"exception: {type(e).__name__}"
+        _thread_state.exception = str(e)
+        logger.error(f"Worker thread exception in embed_text for {file_path} chunk {chunk_index}: {e}")
+        raise
     finally:
+        _thread_state.stage = "releasing_semaphore"
         semaphore.release()
+        _thread_state.stage = "finished"
 
 
 def detect_language(path: str):
@@ -215,16 +237,44 @@ def _process_file_sync(
                         logger.warning(f"Slow embedding API response for {rel_path} chunk {idx}: {embedding_duration:.2f}s total")
                 except concurrent.futures.TimeoutError:
                     elapsed = time.time() - embedding_start_time
-                    logger.error(
-                        f"Future timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx}:\n"
-                        f"  - Elapsed time: {elapsed:.2f}s\n"
-                        f"  - Chunk size: {chunk_size} characters\n"
-                        f"  - Chunk preview: {chunk_preview!r}\n"
-                        f"  - Future state: {future._state if hasattr(future, '_state') else 'unknown'}\n"
-                        f"  - The future.result() call timed out waiting for the embedding API.\n"
-                        f"  - The embedding request may still be running in the background thread.\n"
-                        f"  - Check logs above for 'Embedding API Timeout' messages from the worker thread."
-                    )
+                    
+                    # Try to get exception info from the future if available
+                    future_exception = None
+                    try:
+                        future_exception = future.exception(timeout=0.1)
+                    except concurrent.futures.TimeoutError:
+                        future_exception = None  # Still running
+                    except Exception as e:
+                        future_exception = e
+                    
+                    # Build diagnostic information
+                    diagnostic_info = [
+                        f"Future timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx}:",
+                        f"  - Elapsed time: {elapsed:.2f}s",
+                        f"  - Future state: {future._state if hasattr(future, '_state') else 'unknown'}",
+                    ]
+                    
+                    if future_exception:
+                        diagnostic_info.append(f"  - Future exception: {type(future_exception).__name__}: {future_exception}")
+                    else:
+                        diagnostic_info.append(f"  - Future exception: None (still running or completed)")
+                    
+                    # Add information about running status
+                    if future.running():
+                        diagnostic_info.append(f"  - Future.running(): True - worker thread is still executing")
+                    elif future.done():
+                        diagnostic_info.append(f"  - Future.done(): True - worker thread completed but future.result() timed out retrieving result")
+                    else:
+                        diagnostic_info.append(f"  - Future status: Pending/Unknown")
+                    
+                    diagnostic_info.extend([
+                        f"  - The future.result() call timed out after {EMBEDDING_TIMEOUT}s",
+                        f"  - This means the worker thread did not complete the embedding request in time",
+                        f"  - Check logs above for messages from the worker thread (search for 'Worker thread')",
+                        f"  - The embedding API logs will show the actual HTTP request state"
+                    ])
+                    
+                    logger.error("\n".join(diagnostic_info))
                     emb = None
                     failed_count += 1
                 except Exception as e:
