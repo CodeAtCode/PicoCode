@@ -440,17 +440,42 @@ def analyze_local_path_background(local_path: str, database_path: str, venv_path
 
 
 
-def search_semantic(query: str, database_path: str, top_k: int = 5):
+def search_semantic(query: str, database_path: str, top_k: int = 5, include_content: bool = True):
     """
     Uses sqlite-vector's vector_full_scan to retrieve best-matching chunks and returns
-    a list of {file_id, path, chunk_index, score}.
+    a list of {file_id, path, chunk_index, score, content (optional)}.
+    
+    Args:
+        query: Search query text
+        database_path: Path to the SQLite database
+        top_k: Number of results to return
+        include_content: Whether to retrieve and include the actual chunk text
+        
+    Returns:
+        List of dicts with file_id, path, chunk_index, score, and optionally content
     """
     q_emb = _embedding_client.embed_text(query, file_path="<query>", chunk_index=0)
     if not q_emb:
         return []
 
     try:
-        return _search_vectors(database_path, q_emb, top_k=top_k)
+        results = _search_vectors(database_path, q_emb, top_k=top_k)
+        
+        # If content is requested, retrieve chunk text for each result
+        if include_content:
+            for result in results:
+                try:
+                    chunk_text = _get_chunk_text(
+                        database_path, 
+                        result["file_id"], 
+                        result["chunk_index"]
+                    )
+                    result["content"] = chunk_text or ""
+                except Exception as e:
+                    logger.warning(f"Failed to retrieve chunk text for {result['path']} chunk {result['chunk_index']}: {e}")
+                    result["content"] = ""
+        
+        return results
     except Exception:
         raise
 

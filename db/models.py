@@ -12,10 +12,12 @@ class CreateProjectRequest(BaseModel):
 
 class IndexProjectRequest(BaseModel):
     project_id: str
+    incremental: Optional[bool] = True  # Default to incremental indexing
 
 
 class QueryRequest(BaseModel):
     project_id: str
     query: str
     top_k: Optional[int] = 5
+    include_content: Optional[bool] = True  # Whether to include file content in results
 

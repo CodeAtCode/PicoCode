@@ -24,7 +24,8 @@ class SearchService:
         project_id: str,
         query: str,
         top_k: int = 5,
-        use_cache: bool = True
+        use_cache: bool = True,
+        include_content: bool = True
     ) -> Dict[str, Any]:
         """
         Perform semantic search on a project.
@@ -34,6 +35,7 @@ class SearchService:
             query: Search query text
             top_k: Number of results to return
             use_cache: Whether to use result caching
+            include_content: Whether to include actual file content in results
         
         Returns:
             Dictionary with results, project_id, and query
@@ -53,8 +55,8 @@ class SearchService:
         if stats.get("file_count", 0) == 0:
             raise ValueError(f"Project not indexed: {project_id}")
         
-        # Check cache
-        if use_cache:
+        # Check cache (only if content is not required, as content makes cache key complex)
+        if use_cache and not include_content:
             cache_key = SearchService._make_cache_key(project_id, query, top_k)
             cached = search_cache.get(cache_key)
             if cached is not None:
@@ -63,7 +65,7 @@ class SearchService:
         
         # Perform search
         try:
-            results = search_semantic(query, db_path, top_k=top_k)
+            results = search_semantic(query, db_path, top_k=top_k, include_content=include_content)
             
             response = {
                 "results": results,
@@ -72,8 +74,8 @@ class SearchService:
                 "count": len(results)
             }
             
-            # Cache results
-            if use_cache:
+            # Cache results (only if content not included to keep cache size reasonable)
+            if use_cache and not include_content:
                 search_cache.set(cache_key, response)
             
             logger.info(f"Search completed: {len(results)} results for '{query[:50]}'")
