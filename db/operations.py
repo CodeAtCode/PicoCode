@@ -7,32 +7,15 @@ import threading
 from utils.config import CFG  # config (keeps chunk_size etc if needed)
 from utils.logger import get_logger
 from utils.cache import project_cache, stats_cache, file_cache
+from utils.retry import retry_on_db_locked
 from .db_writer import get_writer
+from .connection import get_db_connection
 
 _LOG = get_logger(__name__)
 
 # Prepared statements cache for frequently used queries
 _PREPARED_STATEMENTS = {}
 _PREPARED_LOCK = threading.Lock()
-
-import threading
-
-# Simple connection helper: we open new connections per operation so the code is robust
-# across threads. We set WAL journal mode for safer concurrency.
-# Added a small timeout to avoid long blocking if DB is locked.
-def _get_connection(db_path: str) -> sqlite3.Connection:
-    dirname = os.path.dirname(os.path.abspath(db_path))
-    if dirname and not os.path.isdir(dirname):
-        os.makedirs(dirname, exist_ok=True)
-    # timeout in seconds for busy sqlite; small value to avoid long blocking in web requests
-    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=5.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA journal_mode = WAL;")
-    except Exception:
-        # Not fatal — continue
-        pass
-    return conn
 
 
 def _get_prepared_statement(conn: sqlite3.Connection, query_key: str, sql: str):
@@ -58,7 +41,7 @@ def init_db(database_path: str) -> None:
     - chunks (with embedding BLOB column for sqlite-vector)
     - project_metadata (project-level tracking)
     """
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
         
@@ -146,7 +129,7 @@ def insert_chunk_row_with_null_embedding(database_path: str, file_id: int, path:
     Insert a chunk metadata row without populating embedding column.
     Returns the new chunks.id.
     """
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
         cur.execute(
@@ -171,7 +154,7 @@ def get_project_stats(database_path: str) -> Dict[str, Any]:
     if cached is not None:
         return cached
     
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
         
@@ -199,7 +182,7 @@ def list_files(database_path: str) -> List[Dict[str, Any]]:
     """
     List all files in a project database.
     """
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         rows = conn.execute(
             "SELECT id, path, snippet, language, created_at FROM files ORDER BY id DESC"
@@ -224,13 +207,15 @@ def clear_project_data(database_path: str) -> None:
     Used when re-indexing a project.
     Invalidates caches.
     """
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
         # Delete chunks first due to foreign key
         cur.execute("DELETE FROM chunks")
         # Delete files
         cur.execute("DELETE FROM files")
+        # Clear vector metadata to allow re-indexing with different embedding dimensions
+        cur.execute("DELETE FROM vector_meta WHERE key = 'dimension'")
         conn.commit()
         
         # Invalidate caches
@@ -245,7 +230,7 @@ def get_file_by_path(database_path: str, path: str) -> Optional[Dict[str, Any]]:
     Get file metadata by path for incremental indexing checks.
     Returns None if file doesn't exist.
     """
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         row = conn.execute(
             "SELECT id, path, last_modified, file_hash FROM files WHERE path = ?",
@@ -286,7 +271,7 @@ def set_project_metadata(database_path: str, key: str, value: str) -> None:
     """
     Set a project metadata key-value pair.
     """
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
         cur.execute(
@@ -313,7 +298,7 @@ def set_project_metadata_batch(database_path: str, metadata: Dict[str, str]) -> 
         database_path: Path to the database
         metadata: Dictionary of key-value pairs to set
     """
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
         for key, value in metadata.items():
@@ -336,7 +321,7 @@ def get_project_metadata(database_path: str, key: str) -> Optional[str]:
     """
     Get a project metadata value by key.
     """
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         row = conn.execute(
             "SELECT value FROM project_metadata WHERE key = ?",
@@ -352,7 +337,7 @@ def delete_file_by_path(database_path: str, path: str) -> None:
     Delete a file and its chunks by path.
     Used for incremental indexing when files are removed.
     """
-    conn = _get_connection(database_path)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
         # Get file_id
@@ -389,27 +374,6 @@ def _ensure_projects_dir():
         raise
 
 
-def _retry_on_db_locked(func, *args, max_retries=DB_RETRY_COUNT, **kwargs):
-    """Retry a database operation if it's locked."""
-    import time
-    last_error = None
-    
-    for attempt in range(max_retries):
-        try:
-            return func(*args, **kwargs)
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e).lower() and attempt < max_retries - 1:
-                last_error = e
-                time.sleep(DB_RETRY_DELAY * (2 ** attempt))  # Exponential backoff
-                continue
-            raise
-        except Exception as e:
-            raise
-    
-    if last_error:
-        raise last_error
-
-
 def _get_project_id(project_path: str) -> str:
     """Generate a stable project ID from the project path."""
     import hashlib
@@ -428,40 +392,34 @@ def _get_projects_registry_path() -> str:
     return os.path.join(PROJECTS_DIR, "registry.db")
 
 
+@retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
 def _init_registry_db():
     """Initialize the projects registry database with proper configuration."""
     registry_path = _get_projects_registry_path()
     
-    def _init():
-        conn = _get_connection(registry_path)
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS projects (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    path TEXT NOT NULL UNIQUE,
-                    database_path TEXT NOT NULL,
-                    created_at TEXT DEFAULT (datetime('now')),
-                    last_indexed_at TEXT,
-                    status TEXT DEFAULT 'created',
-                    settings TEXT
-                )
-                """
-            )
-            conn.commit()
-        except Exception as e:
-            _LOG.error(f"Failed to initialize registry database: {e}")
-            raise
-        finally:
-            conn.close()
-    
+    conn = get_db_connection(registry_path, timeout=5.0, enable_wal=True)
     try:
-        _retry_on_db_locked(_init)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                database_path TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_indexed_at TEXT,
+                status TEXT DEFAULT 'created',
+                settings TEXT
+            )
+            """
+        )
+        conn.commit()
     except Exception as e:
-        _LOG.error(f"Failed to initialize registry after retries: {e}")
+        _LOG.error(f"Failed to initialize registry database: {e}")
         raise
+    finally:
+        conn.close()
 
 
 def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, Any]:
@@ -522,8 +480,9 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _create():
-        conn = _get_connection(registry_path)
+        conn = get_db_connection(registry_path, timeout=5.0, enable_wal=True)
         try:
             cur = conn.cursor()
             
@@ -563,7 +522,7 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
             conn.close()
     
     try:
-        result = _retry_on_db_locked(_create)
+        result = _create()
         return result
     except Exception as e:
         _LOG.error(f"Failed to create project: {e}")
@@ -583,8 +542,9 @@ def get_project(project_path: str) -> Optional[Dict[str, Any]]:
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _get():
-        conn = _get_connection(registry_path)
+        conn = get_db_connection(registry_path, timeout=5.0, enable_wal=True)
         try:
             cur = conn.cursor()
             cur.execute("SELECT * FROM projects WHERE path = ?", (project_path,))
@@ -596,7 +556,7 @@ def get_project(project_path: str) -> Optional[Dict[str, Any]]:
         finally:
             conn.close()
     
-    return _retry_on_db_locked(_get)
+    return _get()
 
 
 def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
@@ -611,8 +571,9 @@ def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _get():
-        conn = _get_connection(registry_path)
+        conn = get_db_connection(registry_path, timeout=5.0, enable_wal=True)
         try:
             cur = conn.cursor()
             cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
@@ -624,7 +585,7 @@ def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
         finally:
             conn.close()
     
-    return _retry_on_db_locked(_get)
+    return _get()
 
 
 def list_projects() -> List[Dict[str, Any]]:
@@ -633,8 +594,9 @@ def list_projects() -> List[Dict[str, Any]]:
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _list():
-        conn = _get_connection(registry_path)
+        conn = get_db_connection(registry_path, timeout=5.0, enable_wal=True)
         try:
             cur = conn.cursor()
             cur.execute("SELECT * FROM projects ORDER BY created_at DESC")
@@ -643,7 +605,7 @@ def list_projects() -> List[Dict[str, Any]]:
         finally:
             conn.close()
     
-    return _retry_on_db_locked(_list)
+    return _list()
 
 
 def update_project_status(project_id: str, status: str, last_indexed_at: Optional[str] = None):
@@ -652,8 +614,9 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _update():
-        conn = _get_connection(registry_path)
+        conn = get_db_connection(registry_path, timeout=5.0, enable_wal=True)
         try:
             cur = conn.cursor()
             if last_indexed_at:
@@ -670,7 +633,7 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
         finally:
             conn.close()
     
-    _retry_on_db_locked(_update)
+    _update()
     # Invalidate cache after update
     project_cache.invalidate(f"project:id:{project_id}")
 
@@ -682,8 +645,9 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _update():
-        conn = _get_connection(registry_path)
+        conn = get_db_connection(registry_path, timeout=5.0, enable_wal=True)
         try:
             cur = conn.cursor()
             cur.execute(
@@ -694,7 +658,7 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
         finally:
             conn.close()
     
-    _retry_on_db_locked(_update)
+    _update()
     # Invalidate cache after update
     project_cache.invalidate(f"project:id:{project_id}")
 
@@ -716,8 +680,9 @@ def delete_project(project_id: str):
     
     registry_path = _get_projects_registry_path()
     
+    @retry_on_db_locked(max_retries=DB_RETRY_COUNT, base_delay=DB_RETRY_DELAY)
     def _delete():
-        conn = _get_connection(registry_path)
+        conn = get_db_connection(registry_path, timeout=5.0, enable_wal=True)
         try:
             cur = conn.cursor()
             cur.execute("DELETE FROM projects WHERE id = ?", (project_id,))
@@ -725,7 +690,7 @@ def delete_project(project_id: str):
         finally:
             conn.close()
     
-    _retry_on_db_locked(_delete)
+    _delete()
     # Invalidate cache after deletion
     project_cache.invalidate(f"project:id:{project_id}")
     if project.get("path"):
