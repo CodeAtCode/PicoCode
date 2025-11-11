@@ -62,17 +62,39 @@ logger = get_logger(__name__)
 # Initialize EmbeddingClient for structured logging and retry logic
 _embedding_client = EmbeddingClient()
 
+# Thread-local storage to track execution state inside futures
+_thread_state = threading.local()
+
 
 def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, file_path: str = "<unknown>", chunk_index: int = 0, model: Optional[str] = None):
     """
     Wrapper to acquire semaphore inside executor task to avoid deadlock.
     The semaphore is acquired in the worker thread, not the main thread.
+    Tracks execution state for debugging timeout issues.
     """
+    # Initialize thread state tracking
+    _thread_state.stage = "acquiring_semaphore"
+    _thread_state.file_path = file_path
+    _thread_state.chunk_index = chunk_index
+    _thread_state.start_time = time.time()
+    
     semaphore.acquire()
     try:
-        return _embedding_client.embed_text(text, file_path=file_path, chunk_index=chunk_index)
+        _thread_state.stage = "calling_embed_text"
+        logger.debug(f"Worker thread starting embed_text for {file_path} chunk {chunk_index}")
+        result = _embedding_client.embed_text(text, file_path=file_path, chunk_index=chunk_index)
+        _thread_state.stage = "completed"
+        logger.debug(f"Worker thread completed embed_text for {file_path} chunk {chunk_index}")
+        return result
+    except Exception as e:
+        _thread_state.stage = f"exception: {type(e).__name__}"
+        _thread_state.exception = str(e)
+        logger.error(f"Worker thread exception in embed_text for {file_path} chunk {chunk_index}: {e}")
+        raise
     finally:
+        _thread_state.stage = "releasing_semaphore"
         semaphore.release()
+        _thread_state.stage = "finished"
 
 
 def detect_language(path: str):
@@ -210,7 +232,61 @@ def _process_file_sync(
                     if embedding_duration > 5.0:
                         logger.warning(f"Slow embedding API response for {rel_path} chunk {idx}: {embedding_duration:.2f}s total")
                 except concurrent.futures.TimeoutError:
-                    logger.error(f"Embedding API timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx}")
+                    elapsed = time.time() - embedding_start_time
+                    
+                    # Try to get exception info from the future if available
+                    future_exception = None
+                    try:
+                        future_exception = future.exception(timeout=0.1)
+                    except concurrent.futures.TimeoutError:
+                        future_exception = None  # Still running
+                    except Exception as e:
+                        future_exception = e
+                    
+                    # Build diagnostic information
+                    diagnostic_info = [
+                        f"Future timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx}:",
+                        f"  - Elapsed time: {elapsed:.2f}s",
+                        f"  - Future state: {future._state if hasattr(future, '_state') else 'unknown'}",
+                    ]
+                    
+                    if future_exception:
+                        diagnostic_info.append(f"  - Future exception: {type(future_exception).__name__}: {future_exception}")
+                    else:
+                        diagnostic_info.append(f"  - Future exception: None (still running or completed)")
+                    
+                    # Add information about running status
+                    if future.running():
+                        diagnostic_info.append(f"  - Future.running(): True - worker thread is still executing")
+                    elif future.done():
+                        diagnostic_info.append(f"  - Future.done(): True - worker thread completed but future.result() timed out retrieving result")
+                    else:
+                        diagnostic_info.append(f"  - Future status: Pending/Unknown")
+                    
+                    # Generate curl command for debugging
+                    try:
+                        payload = {
+                            "model": _embedding_client.model,
+                            "input": chunk_doc.text,
+                        }
+                        curl_command = _embedding_client._generate_curl_command(
+                            _embedding_client.api_url,
+                            dict(_embedding_client.session.headers),
+                            payload
+                        )
+                    except Exception as e:
+                        curl_command = f"Failed to generate curl command: {e}"
+                    
+                    diagnostic_info.extend([
+                        f"  - The future.result() call timed out after {EMBEDDING_TIMEOUT}s",
+                        f"  - Embedding API state:",
+                        f"    - API timeout: {_embedding_client.timeout}s",
+                        f"    - Max retries: {_embedding_client.max_retries}",
+                        f"  - Curl command to reproduce:",
+                        f"{curl_command}"
+                    ])
+                    
+                    logger.error("\n".join(diagnostic_info))
                     emb = None
                     failed_count += 1
                 except Exception as e:
@@ -241,10 +317,13 @@ def _process_file_sync(
                             print(err_content)
                         except Exception:
                             logger.exception("Failed to write chunk-insert error to disk for %s chunk %d", rel_path, idx)
+                else:
+                    logger.debug(f"Skipping chunk {idx} for {rel_path} - no embedding vector available")
             
             # Log batch completion with timing and status
             batch_duration = time.time() - batch_start_time
-            logger.info(f"Completed batch {batch_num}/{num_batches} for {rel_path}: {saved_count} saved, {failed_count} failed, {batch_duration:.2f}s elapsed")
+            batch_status = "FAILED" if failed_count > 0 and saved_count == 0 else ("PARTIAL" if failed_count > 0 else "SUCCESS")
+            logger.info(f"Batch {batch_num}/{num_batches} for {rel_path} - Status: {batch_status} - {saved_count} saved, {failed_count} failed, {batch_duration:.2f}s elapsed")
 
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
