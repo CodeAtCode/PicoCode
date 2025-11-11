@@ -48,11 +48,20 @@ class PicoCodeToolWindowContent(private val project: Project) {
     fun getContent(): JComponent {
         val panel = JPanel(BorderLayout())
         
-        // Server config panel (collapsed by default)
+        // Server config panel with re-index button
         val configPanel = FormBuilder.createFormBuilder()
             .addLabeledComponent("PicoCode Host:", serverHostField)
             .addLabeledComponent("PicoCode Port:", serverPortField)
             .panel
+        
+        // Add a re-index button to config panel
+        val reindexBtn = JButton("Re-index Project")
+        reindexBtn.addActionListener {
+            reindexProject()
+        }
+        val configPanelWithButton = JPanel(BorderLayout())
+        configPanelWithButton.add(configPanel, BorderLayout.CENTER)
+        configPanelWithButton.add(reindexBtn, BorderLayout.SOUTH)
         
         // Chat display area
         val chatScrollPane = JBScrollPane(chatArea)
@@ -90,7 +99,7 @@ class PicoCodeToolWindowContent(private val project: Project) {
         inputPanel.add(buttonPanel, BorderLayout.SOUTH)
         
         // Layout
-        panel.add(configPanel, BorderLayout.NORTH)
+        panel.add(configPanelWithButton, BorderLayout.NORTH)
         panel.add(chatScrollPane, BorderLayout.CENTER)
         panel.add(inputPanel, BorderLayout.SOUTH)
         
@@ -178,6 +187,59 @@ class PicoCodeToolWindowContent(private val project: Project) {
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
                     appendToChat("Error", "Failed to communicate with PicoCode: ${e.message}\n" +
+                        "Make sure PicoCode server is running on http://$host:$port")
+                }
+            }
+        }
+    }
+    
+    /**
+     * Re-index the current project
+     */
+    private fun reindexProject() {
+        val projectPath = project.basePath ?: return
+        val host = getServerHost()
+        val port = getServerPort()
+        
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                // Get or create project to get project ID
+                val projectsUrl = URL("http://$host:$port/api/projects")
+                val createConnection = projectsUrl.openConnection() as HttpURLConnection
+                createConnection.requestMethod = "POST"
+                createConnection.setRequestProperty("Content-Type", "application/json")
+                createConnection.doOutput = true
+                
+                val createBody = gson.toJson(mapOf(
+                    "path" to projectPath,
+                    "name" to project.name
+                ))
+                createConnection.outputStream.use { it.write(createBody.toByteArray()) }
+                
+                val createResponse = createConnection.inputStream.bufferedReader().readText()
+                val projectData = gson.fromJson(createResponse, JsonObject::class.java)
+                val projectId = projectData.get("id").asString
+                
+                // Trigger re-indexing
+                val indexUrl = URL("http://$host:$port/api/projects/index")
+                val indexConnection = indexUrl.openConnection() as HttpURLConnection
+                indexConnection.requestMethod = "POST"
+                indexConnection.setRequestProperty("Content-Type", "application/json")
+                indexConnection.doOutput = true
+                
+                val indexBody = gson.toJson(mapOf("project_id" to projectId))
+                indexConnection.outputStream.use { it.write(indexBody.toByteArray()) }
+                
+                val indexResponse = indexConnection.inputStream.bufferedReader().readText()
+                val indexData = gson.fromJson(indexResponse, JsonObject::class.java)
+                
+                SwingUtilities.invokeLater {
+                    val status = indexData.get("status")?.asString ?: "unknown"
+                    appendToChat("System", "Re-indexing started. Status: $status")
+                }
+            } catch (e: Exception) {
+                SwingUtilities.invokeLater {
+                    appendToChat("Error", "Failed to start re-indexing: ${e.message}\n" +
                         "Make sure PicoCode server is running on http://$host:$port")
                 }
             }

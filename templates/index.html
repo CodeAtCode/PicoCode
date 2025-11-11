@@ -69,7 +69,8 @@
                         Files: <span class="file-count">0</span> | Embeddings: <span class="embedding-count">0</span>
                       </small>
                     </div>
-                    <div>
+                    <div class="d-flex gap-1">
+                      <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="{{ p.id }}" title="Re-index project">⟳</button>
                       <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="{{ p.id }}" title="Delete project">×</button>
                     </div>
                   </li>
@@ -311,8 +312,37 @@
       }
     }, 10000); // Poll every 10 seconds to reduce server load
 
-    // Handle project deletion
+    // Handle project re-indexing
     document.addEventListener('click', async (e) => {
+      if (e.target.classList.contains('reindex-project-btn')) {
+        const projectId = e.target.getAttribute('data-project-id');
+        
+        if (!confirm('Re-index this project? This will refresh all embeddings.')) {
+          return;
+        }
+        
+        try {
+          const response = await fetch('/api/projects/index', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project_id: projectId })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            alert(`Re-indexing started. Status: ${data.status}`);
+            // Reload page to show updated status
+            window.location.reload();
+          } else {
+            const data = await response.json();
+            alert(`Failed to start re-indexing: ${data.error || 'Unknown error'}`);
+          }
+        } catch (err) {
+          alert(`Error starting re-indexing: ${err.message}`);
+        }
+      }
+      
+      // Handle project deletion
       if (e.target.classList.contains('delete-project-btn')) {
         const projectId = e.target.getAttribute('data-project-id');
         
