@@ -22,7 +22,7 @@ class DBWriter:
         self.database_path = database_path
         self._q = queue.Queue()
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._worker, daemon=True, name=f"DBWriter-{database_path}")
+        self._thread = threading.Thread(target=self._worker, daemon=False, name=f"DBWriter-{database_path}")
         self._timeout_seconds = timeout_seconds
         self._thread.start()
         _LOG.info(f"DBWriter started for database: {database_path}")

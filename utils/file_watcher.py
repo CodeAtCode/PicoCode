@@ -123,7 +123,7 @@ class FileWatcher:
         self._thread = threading.Thread(
             target=self._watch_loop,
             name="FileWatcher",
-            daemon=True
+            daemon=False
         )
         self._thread.start()
         self.logger.info("FileWatcher started")
