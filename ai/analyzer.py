@@ -241,13 +241,6 @@ def _process_file_sync(
                             print(err_content)
                         except Exception:
                             logger.exception("Failed to write chunk-insert error to disk for %s chunk %d", rel_path, idx)
-                else:
-                    failed_count += 1
-                    try:
-                        err_content = "Embedding API returned no vector for chunk."
-                        print(err_content)
-                    except Exception:
-                        logger.exception("Failed to write empty-embedding error to disk for %s chunk %d", rel_path, idx)
             
             # Log batch completion with timing and status
             batch_duration = time.time() - batch_start_time
