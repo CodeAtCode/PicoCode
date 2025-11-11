@@ -3,7 +3,7 @@ name = "picocode"
 version = "0.2.0"
 description = "Production-ready local RAG backend with per-project storage and PyCharm integration"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 
 dependencies = [
   "fastapi>=0.85",
@@ -13,11 +13,11 @@ dependencies = [
   "tomli>=2.0; python_version < '3.11'",
   "python-dotenv>=1.0",
   "openai>=2.2.0",
-  "llama-index[langchain]>=0.5.9",
+  "llama-index>=0.5.9",
   "sqliteai-vector>=0.9.51",
   "pydantic>=2.0",
   "tree-sitter>=0.21.3",
-  "tree-sitter-languages>=1.10.2",
+  "tree-sitter-language-pack>=0.9.1",
 ]
 
 [build-system]
