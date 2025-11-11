@@ -73,8 +73,6 @@ def load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:
             # version function may not be present; ignore
             pass
     except Exception as e:
-        # CRASH THE PROGRAM: This is intentional and mandatory
-        logger.error(f"FATAL: Failed to load sqlite-vector extension: {e}")
         raise RuntimeError(f"Failed to load sqlite-vector extension: {e}") from e
 
 
