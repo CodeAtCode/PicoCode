@@ -215,7 +215,6 @@ def _process_file_sync(
             
             # Log batch processing start
             batch_start_time = time.time()
-            logger.info(f"Generating embeddings for {rel_path}: batch {batch_num}/{num_batches} ({len(batch)} chunks)")
             
             embedding_futures = []
             
@@ -231,11 +230,6 @@ def _process_file_sync(
             for idx, chunk_doc, future, embedding_start_time in embedding_futures:
                 try:
                     emb = future.result(timeout=EMBEDDING_TIMEOUT)  # Add timeout to prevent hanging indefinitely
-                    embedding_duration = time.time() - embedding_start_time
-                    
-                    # Log slow embedding generation (> 5 seconds)
-                    if embedding_duration > 5.0:
-                        logger.warning(f"Slow embedding API response for {rel_path} chunk {idx}: {embedding_duration:.2f}s total")
                 except concurrent.futures.TimeoutError:
                     elapsed = time.time() - embedding_start_time
                     
@@ -268,26 +262,6 @@ def _process_file_sync(
                     else:
                         diagnostic_info.append(f"  - Future status: Pending/Unknown")
                     
-                    # Generate curl command for debugging
-                    try:
-                        payload = {
-                            "model": _embedding_client.model,
-                            "input": chunk_doc.text,
-                        }
-                        curl_command = _embedding_client._generate_curl_command(payload)
-                    except Exception as e:
-                        curl_command = f"Failed to generate curl command: {e}"
-                    
-                    diagnostic_info.extend([
-                        f"  - The future.result() call timed out after {EMBEDDING_TIMEOUT}s",
-                        f"  - Embedding API state:",
-                        f"    - API timeout: {_embedding_client.timeout}s",
-                        f"    - Max retries: {_embedding_client.max_retries}",
-                        f"  - Curl command to reproduce:",
-                        f"{curl_command}"
-                    ])
-                    
-                    logger.error("\n".join(diagnostic_info))
                     emb = None
                     failed_count += 1
                 except Exception as e:
@@ -303,11 +277,6 @@ def _process_file_sync(
                             _load_sqlite_vector_extension(conn2)
                             _insert_chunk_vector_with_retry(conn2, fid, rel_path, idx, emb)
                             saved_count += 1
-                            db_duration = time.time() - db_start_time
-                            
-                            # Log slow database operations (> 2 seconds)
-                            if db_duration > 2.0:
-                                logger.warning(f"Slow database insert for {rel_path} chunk {idx}: {db_duration:.2f}s")
                         finally:
                             conn2.close()
                         embedded_any = True
@@ -320,11 +289,6 @@ def _process_file_sync(
                             logger.exception("Failed to write chunk-insert error to disk for %s chunk %d", rel_path, idx)
                 else:
                     logger.debug(f"Skipping chunk {idx} for {rel_path} - no embedding vector available")
-            
-            # Log batch completion with timing and status
-            batch_duration = time.time() - batch_start_time
-            batch_status = "FAILED" if failed_count > 0 and saved_count == 0 else ("PARTIAL" if failed_count > 0 else "SUCCESS")
-            logger.info(f"Batch {batch_num}/{num_batches} for {rel_path} - Status: {batch_status} - {saved_count} saved, {failed_count} failed, {batch_duration:.2f}s elapsed")
 
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:

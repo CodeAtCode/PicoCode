@@ -263,10 +263,6 @@ class EmbeddingClient:
                 if resp and hasattr(resp, 'data') and len(resp.data) > 0:
                     embedding = resp.data[0].embedding
                     if embedding and isinstance(embedding, list):
-                        _embedding_logger.info(
-                            "Embedding succeeded",
-                            extra={"request_id": request_id, "file": file_path, "chunk_index": chunk_index},
-                        )
                         return embedding
                     else:
                         raise EmbeddingError(f"Invalid embedding format in response")
