@@ -55,17 +55,6 @@ jobs:
         run: ./gradlew --no-daemon --version
         working-directory: ide-plugins
 
-      - name: Run diagnostics script (prints wrapper and kotlin plugin references)
-        run: |
-          mkdir -p ../out
-          ./inspect_gradle_kotlin_versions.sh > ../out/ci-diagnostics.txt || true
-        working-directory: ide-plugins
-      - name: Upload diagnostics
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-diagnostics-java-17
-          path: out/ci-diagnostics.txt
-
       - name: Full build with stacktrace (capture to file)
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
