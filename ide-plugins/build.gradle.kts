@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.picocode"
-version = "0.2.0"
+version = project.findProperty("version") as String? ?: "0.2.0"
 
 repositories {
     mavenCentral()
@@ -34,5 +34,13 @@ tasks {
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
+    }
+    
+    buildPlugin {
+        archiveBaseName.set("intellij-plugin")
+    }
+    
+    patchPluginXml {
+        version.set(project.version.toString())
     }
 }
