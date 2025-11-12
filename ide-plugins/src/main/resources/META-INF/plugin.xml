@@ -18,5 +18,10 @@
                     factoryClass="com.picocode.PicoCodeToolWindowFactory"/>
         <statusBarWidgetFactory implementation="com.picocode.PicoCodeStatusBarWidgetFactory" 
                                 order="after memoryIndicator"/>
+        <projectConfigurable parentId="tools" 
+                            instance="com.picocode.PicoCodeConfigurable"
+                            id="com.picocode.PicoCodeConfigurable"
+                            displayName="PicoCode"/>
+        <projectService serviceImplementation="com.picocode.PicoCodeSettings"/>
     </extensions>
 </idea-plugin>

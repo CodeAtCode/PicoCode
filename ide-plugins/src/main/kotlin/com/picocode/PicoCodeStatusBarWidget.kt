@@ -5,6 +5,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.StatusBar
 import com.intellij.openapi.wm.StatusBarWidget
 import com.intellij.openapi.wm.StatusBarWidgetFactory
+import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.openapi.ui.Messages
 import com.intellij.util.Consumer
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -22,8 +24,6 @@ class PicoCodeStatusBarWidget(private val project: Project) : StatusBarWidget,
     
     companion object {
         const val ID = "PicoCodeStatusWidget"
-        private const val DEFAULT_HOST = "localhost"
-        private const val DEFAULT_PORT = 8000
         private const val POLLING_INTERVAL_SECONDS = 5L
     }
     
@@ -93,7 +93,21 @@ class PicoCodeStatusBarWidget(private val project: Project) : StatusBarWidget,
     
     override fun getClickConsumer(): Consumer<MouseEvent>? {
         return Consumer { 
-            // Optional: could open tool window or trigger re-indexing
+            // Open the PicoCode RAG tool window on click
+            ApplicationManager.getApplication().invokeLater {
+                val toolWindowManager = ToolWindowManager.getInstance(project)
+                val toolWindow = toolWindowManager.getToolWindow("PicoCode RAG")
+                
+                if (toolWindow != null) {
+                    toolWindow.show()
+                } else {
+                    Messages.showInfoMessage(
+                        project,
+                        "PicoCode RAG tool window is not available. Please ensure the plugin is properly installed.",
+                        "PicoCode RAG"
+                    )
+                }
+            }
         }
     }
     
@@ -127,7 +141,11 @@ class PicoCodeStatusBarWidget(private val project: Project) : StatusBarWidget,
     
     private fun getOrCreateProject(projectPath: String): String? {
         return try {
-            val url = URL("http://$DEFAULT_HOST:$DEFAULT_PORT/api/projects")
+            val settings = PicoCodeSettings.getInstance(project)
+            val host = settings.state.serverHost
+            val port = settings.state.serverPort
+            
+            val url = URL("http://$host:$port/api/projects")
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.setRequestProperty("Content-Type", "application/json")
@@ -149,7 +167,11 @@ class PicoCodeStatusBarWidget(private val project: Project) : StatusBarWidget,
     
     private fun fetchProjectStatus(projectId: String): Pair<String, IndexingStats?> {
         return try {
-            val url = URL("http://$DEFAULT_HOST:$DEFAULT_PORT/api/projects/$projectId")
+            val settings = PicoCodeSettings.getInstance(project)
+            val host = settings.state.serverHost
+            val port = settings.state.serverPort
+            
+            val url = URL("http://$host:$port/api/projects/$projectId")
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             

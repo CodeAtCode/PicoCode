@@ -1,16 +1,10 @@
 package com.picocode
 
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.fileEditor.FileEditorManager
-import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
-import com.intellij.ui.components.JBTextField
-import com.intellij.util.ui.FormBuilder
 import java.awt.BorderLayout
-import java.io.File
 import javax.swing.*
 import java.net.HttpURLConnection
 import java.net.URL
@@ -23,10 +17,6 @@ import com.google.gson.JsonObject
  * Assumes PicoCode server is already running
  */
 class PicoCodeToolWindowContent(private val project: Project) {
-    // PicoCode server configuration (only host and port needed)
-    private val serverHostField = JBTextField("localhost")
-    private val serverPortField = JBTextField("8000")
-    
     // Chat components
     private val chatArea = JBTextArea(25, 60)
     private val inputField = JBTextArea(3, 60)
@@ -42,26 +32,26 @@ class PicoCodeToolWindowContent(private val project: Project) {
         inputField.wrapStyleWord = true
     }
     
-    private fun getServerHost(): String = serverHostField.text.trim().ifEmpty { "localhost" }
-    private fun getServerPort(): Int = serverPortField.text.trim().toIntOrNull() ?: 8000
+    private fun getServerHost(): String {
+        val settings = PicoCodeSettings.getInstance(project)
+        return settings.state.serverHost
+    }
+    
+    private fun getServerPort(): Int {
+        val settings = PicoCodeSettings.getInstance(project)
+        return settings.state.serverPort
+    }
     
     fun getContent(): JComponent {
         val panel = JPanel(BorderLayout())
         
-        // Server config panel with re-index button
-        val configPanel = FormBuilder.createFormBuilder()
-            .addLabeledComponent("PicoCode Host:", serverHostField)
-            .addLabeledComponent("PicoCode Port:", serverPortField)
-            .panel
-        
-        // Add a re-index button to config panel
+        // Add a re-index button at the top
         val reindexBtn = JButton("Re-index Project")
         reindexBtn.addActionListener {
             reindexProject()
         }
-        val configPanelWithButton = JPanel(BorderLayout())
-        configPanelWithButton.add(configPanel, BorderLayout.CENTER)
-        configPanelWithButton.add(reindexBtn, BorderLayout.SOUTH)
+        val topPanel = JPanel(BorderLayout())
+        topPanel.add(reindexBtn, BorderLayout.EAST)
         
         // Chat display area
         val chatScrollPane = JBScrollPane(chatArea)
@@ -99,7 +89,7 @@ class PicoCodeToolWindowContent(private val project: Project) {
         inputPanel.add(buttonPanel, BorderLayout.SOUTH)
         
         // Layout
-        panel.add(configPanelWithButton, BorderLayout.NORTH)
+        panel.add(topPanel, BorderLayout.NORTH)
         panel.add(chatScrollPane, BorderLayout.CENTER)
         panel.add(inputPanel, BorderLayout.SOUTH)
         
