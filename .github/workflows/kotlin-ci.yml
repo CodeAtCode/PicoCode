@@ -39,12 +39,12 @@ jobs:
       - name: Setup Gradle wrapper if missing
         run: |
           if [ ! -f gradlew ] || [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "Setting up Gradle wrapper for Gradle 9.2.0..."
+            echo "Setting up Gradle wrapper for Gradle 8.10.2..."
             cd /tmp
-            curl -L -s -o gradle-9.2.0.zip https://services.gradle.org/distributions/gradle-9.2.0-bin.zip
-            unzip -q gradle-9.2.0.zip
+            curl -L -s -o gradle-8.10.2.zip https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+            unzip -q gradle-8.10.2.zip
             cd $GITHUB_WORKSPACE/ide-plugins
-            /tmp/gradle-9.2.0/bin/gradle wrapper --gradle-version 9.2.0
+            /tmp/gradle-8.10.2/bin/gradle wrapper --gradle-version 8.10.2
             chmod +x gradlew
             echo "Wrapper installed"
           fi
