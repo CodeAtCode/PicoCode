@@ -39,6 +39,18 @@ jobs:
           restore-keys: |
             gradle-${{ matrix.java-version }}-
 
+      - name: Setup Gradle wrapper jar if missing
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "Setting up gradle-wrapper.jar for Gradle 8.4..."
+            cd /tmp
+            curl -L -s -o gradle-8.4.zip https://services.gradle.org/distributions/gradle-8.4-bin.zip
+            unzip -q gradle-8.4.zip
+            mkdir -p $GITHUB_WORKSPACE/ide-plugins/gradle/wrapper
+            cp gradle-8.4/lib/plugins/gradle-wrapper-8.4.jar $GITHUB_WORKSPACE/ide-plugins/gradle/wrapper/gradle-wrapper.jar
+            echo "Wrapper jar installed"
+          fi
+
       - name: Make wrapper executable
         run: chmod +x ./gradlew
         working-directory: ide-plugins
