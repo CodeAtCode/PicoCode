@@ -39,21 +39,20 @@ jobs:
           restore-keys: |
             gradle-${{ matrix.java-version }}-
 
-      - name: Setup Gradle wrapper jar if missing
+      - name: Setup Gradle wrapper if missing
         run: |
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "Setting up gradle-wrapper.jar for Gradle 8.4..."
+          if [ ! -f gradlew ] || [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "Setting up Gradle wrapper for Gradle 9.2.0..."
             cd /tmp
-            curl -L -s -o gradle-8.4.zip https://services.gradle.org/distributions/gradle-8.4-bin.zip
-            unzip -q gradle-8.4.zip
+            curl -L -s -o gradle-9.2.0.zip https://services.gradle.org/distributions/gradle-9.2.0-bin.zip
+            unzip -q gradle-9.2.0.zip
             mkdir -p $GITHUB_WORKSPACE/ide-plugins/gradle/wrapper
-            cp gradle-8.4/lib/plugins/gradle-wrapper-8.4.jar $GITHUB_WORKSPACE/ide-plugins/gradle/wrapper/gradle-wrapper.jar
-            echo "Wrapper jar installed"
+            cp gradle-9.2.0/gradle/wrapper/gradle-wrapper.jar $GITHUB_WORKSPACE/ide-plugins/gradle/wrapper/gradle-wrapper.jar || \
+              cp gradle-9.2.0/lib/plugins/gradle-wrapper-9.2.0.jar $GITHUB_WORKSPACE/ide-plugins/gradle/wrapper/gradle-wrapper.jar
+            cp gradle-9.2.0/gradlew $GITHUB_WORKSPACE/ide-plugins/gradlew
+            chmod +x $GITHUB_WORKSPACE/ide-plugins/gradlew
+            echo "Wrapper installed"
           fi
-
-      - name: Make wrapper executable
-        run: chmod +x ./gradlew
-        working-directory: ide-plugins
 
       - name: Print Gradle info (for debugging)
         run: ./gradlew --no-daemon --version
