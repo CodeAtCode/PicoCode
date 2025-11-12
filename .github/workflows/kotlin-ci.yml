@@ -43,13 +43,12 @@ jobs:
             cd /tmp
             curl -L -s -o gradle-9.2.0.zip https://services.gradle.org/distributions/gradle-9.2.0-bin.zip
             unzip -q gradle-9.2.0.zip
-            mkdir -p $GITHUB_WORKSPACE/ide-plugins/gradle/wrapper
-            cp gradle-9.2.0/gradle/wrapper/gradle-wrapper.jar $GITHUB_WORKSPACE/ide-plugins/gradle/wrapper/gradle-wrapper.jar || \
-              cp gradle-9.2.0/lib/plugins/gradle-wrapper-9.2.0.jar $GITHUB_WORKSPACE/ide-plugins/gradle/wrapper/gradle-wrapper.jar
-            cp gradle-9.2.0/gradlew $GITHUB_WORKSPACE/ide-plugins/gradlew
-            chmod +x $GITHUB_WORKSPACE/ide-plugins/gradlew
+            cd $GITHUB_WORKSPACE/ide-plugins
+            /tmp/gradle-9.2.0/bin/gradle wrapper --gradle-version 9.2.0
+            chmod +x gradlew
             echo "Wrapper installed"
           fi
+        working-directory: ide-plugins
 
       - name: Print Gradle info (for debugging)
         run: ./gradlew --no-daemon --version
