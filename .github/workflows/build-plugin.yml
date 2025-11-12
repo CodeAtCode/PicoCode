@@ -1,9 +1,12 @@
 name: Build PyCharm Plugin
 
 on:
-  release:
-    types: [created, published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., 0.2.1)'
+        required: true
+        type: string
 
 jobs:
   build:
@@ -48,23 +51,20 @@ jobs:
         fi
       working-directory: ide-plugins
     
+    - name: Set version environment variable
+      run: echo "PLUGIN_VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+    
     - name: Build plugin
       env:
         GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
-      run: ./gradlew buildPlugin --no-daemon --stacktrace
-      working-directory: ide-plugins
-    
-    - name: Get plugin version
-      id: plugin_version
-      run: |
-        VERSION=$(grep "^version" build.gradle.kts | cut -d'"' -f2)
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        PLUGIN_VERSION: ${{ github.event.inputs.version }}
+      run: ./gradlew buildPlugin -Pversion=${{ github.event.inputs.version }} --no-daemon --stacktrace
       working-directory: ide-plugins
     
     - name: Upload plugin artifact
       uses: actions/upload-artifact@v4
       with:
-        name: picocode-plugin-${{ steps.plugin_version.outputs.version }}
+        name: intellij-plugin-${{ github.event.inputs.version }}
         path: ide-plugins/build/distributions/*.zip
     
     - name: Upload to Release

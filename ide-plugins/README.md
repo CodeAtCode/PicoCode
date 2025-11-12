@@ -14,11 +14,15 @@ PyCharm/IntelliJ IDEA plugin for PicoCode RAG Assistant with per-project persist
 ## Building the Plugin
 
 ```bash
-cd plugin
+cd ide-plugins
+# Build with default version (0.2.0)
 ./gradlew buildPlugin
+
+# Or build with a specific version
+./gradlew buildPlugin -Pversion=0.2.1
 ```
 
-The plugin ZIP will be in `build/distributions/`.
+The plugin ZIP will be in `build/distributions/` with the name `intellij-plugin-{version}.zip`.
 
 ## Installation
 
@@ -72,8 +76,8 @@ Hover over the status to see detailed information including file and embedding c
 
 To modify the plugin:
 
-1. Open `plugin/` in IntelliJ IDEA
+1. Open `ide-plugins/` in IntelliJ IDEA
 2. Make changes to Kotlin files
 3. Run `./gradlew runIde` to test in a sandbox IDE
-4. Build with `./gradlew buildPlugin`
+4. Build with `./gradlew buildPlugin` (optionally with `-Pversion=x.y.z`)
 
