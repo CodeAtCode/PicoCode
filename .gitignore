@@ -9,3 +9,7 @@ __pycache__
 # Gradle build artifacts
 ide-plugins/.gradle/
 ide-plugins/build/
+# Gradle wrapper files (generated on first run)
+ide-plugins/gradle/wrapper/gradle-wrapper.jar
+ide-plugins/gradlew
+ide-plugins/gradlew.bat
