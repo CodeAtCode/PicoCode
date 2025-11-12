@@ -3,8 +3,12 @@ name: 'CI — Build Kotlin plugin on PR commits'
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - 'ide-plugins/**'
   push:
     branches: [ "main" ]
+    paths:
+      - 'ide-plugins/**'
 
 jobs:
   build-kotlin-plugin:
