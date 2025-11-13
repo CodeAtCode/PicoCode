@@ -178,7 +178,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app", 
         host=CFG.get("uvicorn_host", "127.0.0.1"), 
-        port=int(CFG.get("uvicorn_port", 8000)), 
+        port=int(CFG.get("uvicorn_port", 8080)), 
         reload=True,
         access_log=False  # Hide access logs
     )

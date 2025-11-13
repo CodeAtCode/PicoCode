@@ -20,7 +20,7 @@ class PicoCodeSettings : PersistentStateComponent<PicoCodeSettings.SettingsState
     
     data class SettingsState(
         var serverHost: String = "localhost",
-        var serverPort: Int = 8000
+        var serverPort: Int = 8080
     )
     
     private var state = SettingsState()

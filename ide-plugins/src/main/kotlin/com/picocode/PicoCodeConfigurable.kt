@@ -53,7 +53,7 @@ class PicoCodeConfigurable(private val project: Project) : Configurable {
         val state = settings.state
         
         state.serverHost = hostField.text.trim().ifEmpty { "localhost" }
-        state.serverPort = portField.text.trim().toIntOrNull() ?: 8000
+        state.serverPort = portField.text.trim().toIntOrNull() ?: 8080
         
         settings.loadState(state)
     }
