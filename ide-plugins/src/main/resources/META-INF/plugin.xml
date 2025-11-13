@@ -1,6 +1,7 @@
 <idea-plugin>
     <id>com.picocode.rag-assistant</id>
     <name>PicoCode RAG Assistant</name>
+    <version>0.0.1</version>
     <vendor>PicoCode</vendor>
 
     <description><![CDATA[

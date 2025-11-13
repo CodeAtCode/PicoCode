@@ -58,40 +58,38 @@ jobs:
         run: ./gradlew --no-daemon --version
         working-directory: ide-plugins
 
-      - name: Full build with stacktrace (capture to file)
+      - name: Build plugin
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
         run: |
           set -o pipefail
-          ./gradlew build --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log || true
+          ./gradlew buildPlugin --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log
         working-directory: ide-plugins
+      
       - name: Upload build log
         uses: actions/upload-artifact@v4
         with:
           name: gradle-build-log-java-17
           path: gradle-build.log
+        if: always()
 
-      - name: Build Kotlin plugin subproject if present
+      - name: Prepare plugin artifact for upload
         run: |
-          set -o pipefail
-          if ./gradlew :kotlin:tasks --dry-run &>/dev/null; then
-            echo "Detected :kotlin subproject -> building it"
-            ./gradlew :kotlin:build --no-daemon --stacktrace 2>&1 | tee ../kotlin-subproject-build.log || true
-            echo "Uploading kotlin-subproject-build.log"
-            ls -la ../kotlin-subproject-build.log || true
-          elif ./gradlew :plugin:kotlin:tasks --dry-run &>/dev/null; then
-            echo "Detected :plugin:kotlin subproject -> building it"
-            ./gradlew :plugin:kotlin:build --no-daemon --stacktrace 2>&1 | tee ../kotlin-subproject-build.log || true
-          else
-            echo "No explicit kotlin plugin subproject found; running assemble on all projects"
-            ./gradlew assemble --no-daemon --stacktrace 2>&1 | tee ../assemble.log || true
+          cd ide-plugins/build/distributions
+          PLUGIN_FILE=$(ls *.zip | head -n 1)
+          if [ -n "$PLUGIN_FILE" ]; then
+            # Create a temporary directory for extraction
+            mkdir -p plugin-extracted
+            # Extract the plugin zip
+            unzip -q "$PLUGIN_FILE" -d plugin-extracted/
+            # Remove the original zip
+            rm "$PLUGIN_FILE"
           fi
-        working-directory: ide-plugins
-      - name: Upload kotlin-subproject/build logs if present
+        if: success()
+
+      - name: Upload plugin artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kotlin-subproject-logs-java-17
-          path: |
-            kotlin-subproject-build.log
-            assemble.log
-        if: always()
+          name: intellij-plugin-pr-${{ github.event.pull_request.number || github.run_number }}
+          path: ide-plugins/build/distributions/plugin-extracted/
+        if: success()

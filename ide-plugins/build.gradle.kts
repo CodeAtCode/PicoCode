@@ -4,6 +4,7 @@ plugins {
     id("org.jetbrains.intellij.platform") version "2.10.4"
 }
 
+// Build configuration for PicoCode IntelliJ Plugin
 group = "com.picocode"
 version = project.findProperty("version") as String? ?: "0.0.1"
 
@@ -21,6 +22,7 @@ dependencies {
     intellijPlatform {
         intellijIdeaCommunity("2023.1")
         bundledPlugin("com.intellij.java")
+        instrumentationTools()
     }
 }
 
@@ -34,10 +36,5 @@ tasks {
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
-    }
-    
-    patchPluginXml {
-        sinceBuild.set("231")
-        untilBuild.set("241.*")
     }
 }
