@@ -73,9 +73,18 @@ jobs:
           path: gradle-build.log
         if: always()
 
+      - name: Rename plugin artifact
+        run: |
+          cd ide-plugins/build/distributions
+          PLUGIN_FILE=$(ls *.zip | head -n 1)
+          if [ -n "$PLUGIN_FILE" ]; then
+            cp "$PLUGIN_FILE" intellij-plugin.zip
+          fi
+        if: success()
+
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v4
         with:
           name: intellij-plugin-pr-${{ github.event.pull_request.number || github.run_number }}
-          path: ide-plugins/build/distributions/*.zip
+          path: ide-plugins/build/distributions/intellij-plugin.zip
         if: success()
