@@ -4,6 +4,7 @@ plugins {
     id("org.jetbrains.intellij.platform") version "2.10.4"
 }
 
+// Build configuration for PicoCode IntelliJ Plugin
 group = "com.picocode"
 version = project.findProperty("version") as String? ?: "0.0.1"
 
