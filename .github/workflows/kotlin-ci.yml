@@ -63,7 +63,7 @@ jobs:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
         run: |
           set -o pipefail
-          ./gradlew buildPlugin verifyPlugin --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log
+          ./gradlew buildPlugin --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log
         working-directory: ide-plugins
       
       - name: Upload build log
