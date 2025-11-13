@@ -9,7 +9,7 @@ PicoCode provides a production-ready local RAG (Retrieval-Augmented Generation) 
 ## Base URL
 
 ```
-http://127.0.0.1:8000/api
+http://127.0.0.1:8080/api
 ```
 
 ## Authentication
@@ -299,7 +299,7 @@ CODING_MODEL=gpt-4o
 
 # Server configuration
 UVICORN_HOST=127.0.0.1
-UVICORN_PORT=8000
+UVICORN_PORT=8080
 
 # File processing
 MAX_FILE_SIZE=200000
@@ -313,7 +313,7 @@ MAX_FILE_SIZE=200000
 import requests
 
 class PicoCodeClient:
-    def __init__(self, base_url="http://127.0.0.1:8000/api"):
+    def __init__(self, base_url="http://127.0.0.1:8080/api"):
         self.base_url = base_url
     
     def create_project(self, path, name=None):
@@ -404,8 +404,8 @@ print(suggestion["response"])
 
 PicoCode provides interactive API documentation:
 
-- **Swagger UI**: http://127.0.0.1:8000/docs
-- **ReDoc**: http://127.0.0.1:8000/redoc
+- **Swagger UI**: http://127.0.0.1:8080/docs
+- **ReDoc**: http://127.0.0.1:8080/redoc
 
 These interfaces allow you to:
 - Browse all endpoints

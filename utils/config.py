@@ -36,7 +36,7 @@ CFG = {
 
     # uvicorn host/port (from .env)
     "uvicorn_host": os.getenv("UVICORN_HOST", "127.0.0.1"),
-    "uvicorn_port": int(os.getenv("UVICORN_PORT", "8000")),
+    "uvicorn_port": int(os.getenv("UVICORN_PORT", "8080")),
 
     # FileWatcher configuration
     "file_watcher_enabled": _bool_env("FILE_WATCHER_ENABLED", True),

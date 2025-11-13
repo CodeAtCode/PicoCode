@@ -36,10 +36,6 @@ tasks {
         }
     }
     
-    buildPlugin {
-        archiveBaseName.set("intellij-plugin")
-    }
-    
     patchPluginXml {
         sinceBuild.set("231")
         untilBuild.set("241.*")
