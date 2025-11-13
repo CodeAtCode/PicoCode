@@ -13,7 +13,6 @@
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow id="PicoCode RAG"
                     secondary="true"
-                    icon="/icons/picocode.png"
                     anchor="right"
                     factoryClass="com.picocode.PicoCodeToolWindowFactory"/>
         <statusBarWidgetFactory implementation="com.picocode.PicoCodeStatusBarWidgetFactory" 
