@@ -10,7 +10,7 @@ on:
     paths:
       - 'ide-plugins/**'
   release:
-    types: [created, published]
+    types: [published]
 
 jobs:
   build-kotlin-plugin:
@@ -84,10 +84,12 @@ jobs:
             mkdir -p plugin-extracted
             # Extract the plugin zip
             unzip -q "$PLUGIN_FILE" -d plugin-extracted/
-            # Remove the original zip
-            rm "$PLUGIN_FILE"
+            # For non-release builds, remove the original zip
+            if [ "${{ github.event_name }}" != "release" ]; then
+              rm "$PLUGIN_FILE"
+            fi
           fi
-        if: success() && github.event_name != 'release'
+        if: success()
 
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v4
@@ -100,6 +102,6 @@ jobs:
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          files: ide-plugins/build/distributions/*.zip
+          files: ide-plugins/build/distributions/plugin-extracted/
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

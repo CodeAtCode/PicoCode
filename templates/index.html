@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PicoCode - Local Codebase Assistant</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@11.0.0/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
@@ -160,328 +161,322 @@
   </div>
 
   <script>
-    // Toggle section visibility
-    function toggleSection(sectionId) {
-      const section = document.getElementById(sectionId);
-      const toggle = document.getElementById(sectionId.replace('Section', 'Toggle'));
-      
-      if (section.style.display === 'none') {
-        section.style.display = 'block';
-        toggle.textContent = '▼';
-      } else {
-        section.style.display = 'none';
-        toggle.textContent = '▶';
-      }
-    }
-    
-    // Configure marked for markdown rendering
-    marked.setOptions({
-      highlight: function(code, lang) {
-        if (lang && hljs.getLanguage(lang)) {
-          try {
-            return hljs.highlight(code, { language: lang }).value;
-          } catch (err) {}
-        }
-        return hljs.highlightAuto(code).value;
-      },
-      breaks: true,
-      gfm: true
-    });
-
-    const chatWindow = document.getElementById("chatWindow");
-    const userPrompt = document.getElementById("userPrompt");
-    const sendBtn = document.getElementById("sendBtn");
-    const clearBtn = document.getElementById("clearBtn");
-    const loadingIndicator = document.getElementById("loadingIndicator");
-    
-    let chatHistory = JSON.parse(localStorage.getItem("picocode_chat_history") || "[]");
-
-    function renderMarkdown(text) {
-      // Parse markdown and sanitize HTML
-      const rawHtml = marked.parse(text);
-      return DOMPurify.sanitize(rawHtml);
-    }
-    
-    function deleteMessage(idx) {
-      if (confirm('Delete this message?')) {
-        chatHistory.splice(idx, 1);
-        localStorage.setItem("picocode_chat_history", JSON.stringify(chatHistory));
-        renderChat();
-      }
-    }
-
-    function renderChat() {
-      if (chatHistory.length === 0) {
-        chatWindow.innerHTML = '<div class="empty-state">Start a conversation by typing a message below</div>';
-        return;
-      }
-      
-      chatWindow.innerHTML = "";
-      chatHistory.forEach((msg, idx) => {
-        const msgDiv = document.createElement("div");
-        msgDiv.className = `msg ${msg.role}`;
+    $(document).ready(function() {
+      // Toggle section visibility
+      window.toggleSection = function(sectionId) {
+        const $section = $('#' + sectionId);
+        const $toggle = $('#' + sectionId.replace('Section', 'Toggle'));
         
-        let content = `
-          <div class="card">
-            <div class="card-body">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <strong>${msg.role === 'user' ? 'You' : 'PicoCode'}</strong>
-                <button onclick="deleteMessage(${idx})" class="btn btn-sm btn-outline-danger" style="padding: 2px 8px; font-size: 12px;">×</button>
-              </div>
-        `;
-        
-        // Render message text as markdown for assistant, plain text for user
-        if (msg.role === 'assistant') {
-          content += `<div class="markdown-content">${renderMarkdown(msg.text)}</div>`;
+        if ($section.css('display') === 'none') {
+          $section.show();
+          $toggle.text('▼');
         } else {
-          content += `<div>${escapeHtml(msg.text)}</div>`;
+          $section.hide();
+          $toggle.text('▶');
         }
-        
-        if (msg.context && msg.context.length > 0) {
-          content += '<div class="mt-3"><strong>Files Used:</strong></div>';
-          content += '<div class="context-list">';
-          msg.context.forEach(c => {
-            content += `
-              <div class="context-item">
-                <div class="context-item-header">
-                  📄 ${escapeHtml(c.path)} 
-                  <span class="badge bg-primary">${c.score.toFixed(4)}</span>
-                </div>
-              </div>
-            `;
-          });
-          content += '</div>';
-        }
-        
-        content += `
-              <div class="meta mt-2">${msg.timestamp}</div>
-            </div>
-          </div>
-        `;
-        
-        msgDiv.innerHTML = content;
-        chatWindow.appendChild(msgDiv);
+      };
+      
+      // Configure marked for markdown rendering
+      marked.setOptions({
+        highlight: function(code, lang) {
+          if (lang && hljs.getLanguage(lang)) {
+            try {
+              return hljs.highlight(code, { language: lang }).value;
+            } catch (err) {}
+          }
+          return hljs.highlightAuto(code).value;
+        },
+        breaks: true,
+        gfm: true
       });
-      
-      chatWindow.scrollTop = chatWindow.scrollHeight;
-      
-      // Apply syntax highlighting to any code blocks
-      chatWindow.querySelectorAll('pre code').forEach((block) => {
-        hljs.highlightElement(block);
-      });
-    }
 
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    function addMessage(role, text, context = []) {
-      const timestamp = new Date().toLocaleTimeString();
-      chatHistory.push({ role, text, context, timestamp });
-      localStorage.setItem("picocode_chat_history", JSON.stringify(chatHistory));
-      renderChat();
-    }
-
-    async function sendMessage() {
-      const prompt = userPrompt.value.trim();
-      if (!prompt) return;
+      const $chatWindow = $('#chatWindow');
+      const $userPrompt = $('#userPrompt');
+      const $sendBtn = $('#sendBtn');
+      const $clearBtn = $('#clearBtn');
+      const $loadingIndicator = $('#loadingIndicator');
       
-      const project_id = document.getElementById("project_id").value;
-      if (!project_id) {
-        alert("Please select a project or index one first.");
-        return;
+      let chatHistory = JSON.parse(localStorage.getItem("picocode_chat_history") || "[]");
+
+      function renderMarkdown(text) {
+        // Parse markdown and sanitize HTML
+        const rawHtml = marked.parse(text);
+        return DOMPurify.sanitize(rawHtml);
       }
       
-      const use_rag = document.getElementById("use_rag").checked;
-      const top_k = parseInt(document.getElementById("top_k").value) || 5;
-      
-      addMessage("user", prompt);
-      userPrompt.value = "";
-      
-      sendBtn.disabled = true;
-      loadingIndicator.style.display = "block";
-      
-      try {
-        const response = await fetch("/code", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            prompt, 
-            use_rag, 
-            project_id,
-            top_k 
-          })
-        });
-        
-        const data = await response.json();
-        
-        if (data.error) {
-          addMessage("assistant", `Error: ${data.error}`);
-        } else {
-          addMessage("assistant", data.response, data.used_context || []);
+      window.deleteMessage = function(idx) {
+        if (confirm('Delete this message?')) {
+          chatHistory.splice(idx, 1);
+          localStorage.setItem("picocode_chat_history", JSON.stringify(chatHistory));
+          renderChat();
         }
-      } catch (err) {
-        addMessage("assistant", `Error: ${err.message}`);
-      } finally {
-        sendBtn.disabled = false;
-        loadingIndicator.style.display = "none";
-      }
-    }
+      };
 
-    sendBtn.addEventListener("click", sendMessage);
-    userPrompt.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        sendMessage();
-      }
-    });
-
-    clearBtn.addEventListener("click", () => {
-      if (confirm("Clear chat history?")) {
-        chatHistory = [];
-        localStorage.removeItem("picocode_chat_history");
-        renderChat();
-      }
-    });
-
-    // Handle creating new project
-    document.getElementById("createProjectBtn").addEventListener("click", async () => {
-      const projectPath = document.getElementById("new_project_path").value.trim();
-      const projectName = document.getElementById("new_project_name").value.trim();
-      
-      if (!projectPath) {
-        alert("Please enter a project path");
-        return;
-      }
-      
-      try {
-        // First, create the project
-        const createResponse = await fetch('/api/projects', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            path: projectPath,
-            name: projectName || null
-          })
-        });
-        
-        if (!createResponse.ok) {
-          const data = await createResponse.json();
-          alert(`Failed to create project: ${data.error || 'Unknown error'}`);
+      function renderChat() {
+        if (chatHistory.length === 0) {
+          $chatWindow.html('<div class="empty-state">Start a conversation by typing a message below</div>');
           return;
         }
         
-        const project = await createResponse.json();
-        const projectId = project.id;
-        
-        // Then, start indexing
-        const indexResponse = await fetch('/api/projects/index', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            project_id: projectId,
-            incremental: true
-          })
+        $chatWindow.empty();
+        chatHistory.forEach((msg, idx) => {
+          const $msgDiv = $('<div>').addClass(`msg ${msg.role}`);
+          
+          let content = `
+            <div class="card">
+              <div class="card-body">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <strong>${msg.role === 'user' ? 'You' : 'PicoCode'}</strong>
+                  <button onclick="deleteMessage(${idx})" class="btn btn-sm btn-outline-danger" style="padding: 2px 8px; font-size: 12px;">×</button>
+                </div>
+          `;
+          
+          // Render message text as markdown for assistant, plain text for user
+          if (msg.role === 'assistant') {
+            content += `<div class="markdown-content">${renderMarkdown(msg.text)}</div>`;
+          } else {
+            content += `<div>${escapeHtml(msg.text)}</div>`;
+          }
+          
+          if (msg.context && msg.context.length > 0) {
+            content += '<div class="mt-3"><strong>Files Used:</strong></div>';
+            content += '<div class="context-list">';
+            msg.context.forEach(c => {
+              content += `
+                <div class="context-item">
+                  <div class="context-item-header">
+                    📄 ${escapeHtml(c.path)} 
+                    <span class="badge bg-primary">${c.score.toFixed(4)}</span>
+                  </div>
+                </div>
+              `;
+            });
+            content += '</div>';
+          }
+          
+          content += `
+                <div class="meta mt-2">${msg.timestamp}</div>
+              </div>
+            </div>
+          `;
+          
+          $msgDiv.html(content);
+          $chatWindow.append($msgDiv);
         });
         
-        if (indexResponse.ok) {
-          alert(`Project created and indexing started!\nProject ID: ${projectId}`);
-          // Clear form
-          document.getElementById("new_project_path").value = "";
-          document.getElementById("new_project_name").value = "";
-          // Reload page to show new project
-          window.location.reload();
-        } else {
-          const data = await indexResponse.json();
-          alert(`Project created but indexing failed: ${data.error || 'Unknown error'}`);
-          window.location.reload();
-        }
-      } catch (err) {
-        alert(`Error: ${err.message}`);
-      }
-    });
-
-    // Allow Enter key to create project
-    document.getElementById("new_project_path").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        document.getElementById("createProjectBtn").click();
-      }
-    });
-
-    // Highlight selected project
-    document.querySelectorAll(".project-item").forEach(li => {
-      li.addEventListener("click", () => {
-        document.querySelectorAll(".project-item").forEach(item => item.classList.remove("active"));
-        li.classList.add("active");
-        const pid = li.getAttribute("data-project-id");
-        document.getElementById("project_id").value = pid;
-      });
-    });
-
-    // Select first project by default
-    const firstProject = document.querySelector(".project-item");
-    if (firstProject) {
-      firstProject.classList.add("active");
-    }
-
-    // Poll for project status updates with detailed stats
-    setInterval(async () => {
-      try {
-        const response = await fetch("/projects/status");
-        const projects = await response.json();
+        $chatWindow.scrollTop($chatWindow.prop('scrollHeight'));
         
-        // Update project status badges and stats
-        for (const p of projects) {
-          const item = document.querySelector(`[data-project-id="${p.id}"]`);
-          if (item) {
-            const badge = item.querySelector('.badge');
-            if (badge) {
-              badge.className = `badge bg-${p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary'}`;
-              badge.textContent = p.status;
-            }
-            
-            // Fetch detailed stats for this project
-            try {
-              const detailResponse = await fetch(`/api/projects/${p.id}`);
-              const details = await detailResponse.json();
+        // Apply syntax highlighting to any code blocks
+        $chatWindow.find('pre code').each(function() {
+          hljs.highlightElement(this);
+        });
+      }
+
+      function escapeHtml(text) {
+        return $('<div>').text(text).html();
+      }
+
+      function addMessage(role, text, context = []) {
+        const timestamp = new Date().toLocaleTimeString();
+        chatHistory.push({ role, text, context, timestamp });
+        localStorage.setItem("picocode_chat_history", JSON.stringify(chatHistory));
+        renderChat();
+      }
+
+      async function sendMessage() {
+        const prompt = $userPrompt.val().trim();
+        if (!prompt) return;
+        
+        const project_id = $('#project_id').val();
+        if (!project_id) {
+          alert("Please select a project or index one first.");
+          return;
+        }
+        
+        const use_rag = $('#use_rag').is(':checked');
+        const top_k = parseInt($('#top_k').val()) || 5;
+        
+        addMessage("user", prompt);
+        $userPrompt.val("");
+        
+        $sendBtn.prop('disabled', true);
+        $loadingIndicator.show();
+        
+        try {
+          const response = await fetch("/code", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              prompt, 
+              use_rag, 
+              project_id,
+              top_k 
+            })
+          });
+          
+          const data = await response.json();
+          
+          if (data.error) {
+            addMessage("assistant", `Error: ${data.error}`);
+          } else {
+            addMessage("assistant", data.response, data.used_context || []);
+          }
+        } catch (err) {
+          addMessage("assistant", `Error: ${err.message}`);
+        } finally {
+          $sendBtn.prop('disabled', false);
+          $loadingIndicator.hide();
+        }
+      }
+
+      $sendBtn.on('click', sendMessage);
+      $userPrompt.on('keydown', function(e) {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+
+      $clearBtn.on('click', function() {
+        if (confirm("Clear chat history?")) {
+          chatHistory = [];
+          localStorage.removeItem("picocode_chat_history");
+          renderChat();
+        }
+      });
+
+      // Handle creating new project
+      $('#createProjectBtn').on('click', async function() {
+        const projectPath = $('#new_project_path').val().trim();
+        const projectName = $('#new_project_name').val().trim();
+        
+        if (!projectPath) {
+          alert("Please enter a project path");
+          return;
+        }
+        
+        try {
+          // First, create the project
+          const createResponse = await fetch('/api/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              path: projectPath,
+              name: projectName || null
+            })
+          });
+          
+          if (!createResponse.ok) {
+            const data = await createResponse.json();
+            alert(`Failed to create project: ${data.error || 'Unknown error'}`);
+            return;
+          }
+          
+          const project = await createResponse.json();
+          const projectId = project.id;
+          
+          // Then, start indexing
+          const indexResponse = await fetch('/api/projects/index', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              project_id: projectId,
+              incremental: true
+            })
+          });
+          
+          if (indexResponse.ok) {
+            alert(`Project created and indexing started!\nProject ID: ${projectId}`);
+            // Clear form
+            $('#new_project_path').val("");
+            $('#new_project_name').val("");
+            // Reload page to show new project
+            window.location.reload();
+          } else {
+            const data = await indexResponse.json();
+            alert(`Project created but indexing failed: ${data.error || 'Unknown error'}`);
+            window.location.reload();
+          }
+        } catch (err) {
+          alert(`Error: ${err.message}`);
+        }
+      });
+
+      // Allow Enter key to create project
+      $('#new_project_path').on('keydown', function(e) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          $('#createProjectBtn').click();
+        }
+      });
+
+      // Highlight selected project
+      $('.project-item').on('click', function() {
+        $('.project-item').removeClass('active');
+        $(this).addClass('active');
+        const pid = $(this).attr('data-project-id');
+        $('#project_id').val(pid);
+      });
+
+      // Select first project by default
+      const $firstProject = $('.project-item').first();
+      if ($firstProject.length) {
+        $firstProject.addClass('active');
+      }
+
+      // Poll for project status updates with detailed stats
+      setInterval(async () => {
+        try {
+          const response = await fetch("/projects/status");
+          const projects = await response.json();
+          
+          // Update project status badges and stats
+          for (const p of projects) {
+            const $item = $(`[data-project-id="${p.id}"]`);
+            if ($item.length) {
+              const $badge = $item.find('.badge');
+              if ($badge.length) {
+                $badge.attr('class', `badge bg-${p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary'}`);
+                $badge.text(p.status);
+              }
               
-              if (details.indexing_stats) {
-                const indexingInfo = item.querySelector('.indexing-info');
-                const fileCount = item.querySelector('.file-count');
-                const totalFiles = item.querySelector('.total-files');
-                const embeddingCount = item.querySelector('.embedding-count');
+              // Fetch detailed stats for this project
+              try {
+                const detailResponse = await fetch(`/api/projects/${p.id}`);
+                const details = await detailResponse.json();
                 
-                if (indexingInfo && fileCount && totalFiles && embeddingCount) {
-                  fileCount.textContent = details.indexing_stats.file_count || 0;
-                  totalFiles.textContent = details.indexing_stats.total_files || '?';
-                  embeddingCount.textContent = details.indexing_stats.embedding_count || 0;
+                if (details.indexing_stats) {
+                  const $indexingInfo = $item.find('.indexing-info');
+                  const $fileCount = $item.find('.file-count');
+                  const $totalFiles = $item.find('.total-files');
+                  const $embeddingCount = $item.find('.embedding-count');
                   
-                  // Show stats if project has been indexed
-                  if (details.indexing_stats.file_count > 0 || details.indexing_stats.total_files > 0) {
-                    indexingInfo.style.display = 'block';
-                  } else {
-                    indexingInfo.style.display = 'none';
+                  if ($indexingInfo.length && $fileCount.length && $totalFiles.length && $embeddingCount.length) {
+                    $fileCount.text(details.indexing_stats.file_count || 0);
+                    $totalFiles.text(details.indexing_stats.total_files || '?');
+                    $embeddingCount.text(details.indexing_stats.embedding_count || 0);
+                    
+                    // Show stats if project has been indexed
+                    if (details.indexing_stats.file_count > 0 || details.indexing_stats.total_files > 0) {
+                      $indexingInfo.show();
+                    } else {
+                      $indexingInfo.hide();
+                    }
                   }
                 }
+              } catch (detailErr) {
+                // Ignore errors fetching individual project details
               }
-            } catch (detailErr) {
-              // Ignore errors fetching individual project details
             }
           }
+        } catch (err) {
+          console.error("Error polling status:", err);
         }
-      } catch (err) {
-        console.error("Error polling status:", err);
-      }
-    }, 10000); // Poll every 10 seconds to reduce server load
+      }, 10000); // Poll every 10 seconds to reduce server load
 
-    // Handle project re-indexing
-    document.addEventListener('click', async (e) => {
-      // Handle continue indexing (incremental)
-      if (e.target.classList.contains('continue-index-btn')) {
-        const projectId = e.target.getAttribute('data-project-id');
+      // Handle project re-indexing
+      $(document).on('click', '.continue-index-btn', async function(e) {
+        const projectId = $(this).attr('data-project-id');
         
         if (!confirm('Continue indexing this project? This will only index new or modified files.')) {
           return;
@@ -509,11 +504,11 @@
         } catch (err) {
           alert(`Error starting indexing: ${err.message}`);
         }
-      }
+      });
       
       // Handle full re-indexing
-      if (e.target.classList.contains('reindex-project-btn')) {
-        const projectId = e.target.getAttribute('data-project-id');
+      $(document).on('click', '.reindex-project-btn', async function(e) {
+        const projectId = $(this).attr('data-project-id');
         
         if (!confirm('Re-index this project completely? This will re-process all files.')) {
           return;
@@ -541,11 +536,11 @@
         } catch (err) {
           alert(`Error starting re-indexing: ${err.message}`);
         }
-      }
+      });
       
       // Handle project deletion
-      if (e.target.classList.contains('delete-project-btn')) {
-        const projectId = e.target.getAttribute('data-project-id');
+      $(document).on('click', '.delete-project-btn', async function(e) {
+        const projectId = $(this).attr('data-project-id');
         
         if (!confirm('Delete this project and its database?')) {
           return;
@@ -566,11 +561,11 @@
         } catch (err) {
           alert(`Error deleting project: ${err.message}`);
         }
-      }
-    });
+      });
 
-    // Initial render
-    renderChat();
+      // Initial render
+      renderChat();
+    });
   </script>
 </body>
 </html>
