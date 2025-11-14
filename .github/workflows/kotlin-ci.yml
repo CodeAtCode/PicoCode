@@ -9,13 +9,15 @@ on:
     branches: [ "main" ]
     paths:
       - 'ide-plugins/**'
+  release:
+    types: [published]
 
 jobs:
   build-kotlin-plugin:
     name: 'Build (Java 17)'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -82,8 +84,10 @@ jobs:
             mkdir -p plugin-extracted
             # Extract the plugin zip
             unzip -q "$PLUGIN_FILE" -d plugin-extracted/
-            # Remove the original zip
-            rm "$PLUGIN_FILE"
+            # For non-release builds, remove the original zip
+            if [ "${{ github.event_name }}" != "release" ]; then
+              rm "$PLUGIN_FILE"
+            fi
           fi
         if: success()
 
@@ -92,4 +96,12 @@ jobs:
         with:
           name: intellij-plugin-pr-${{ github.event.pull_request.number || github.run_number }}
           path: ide-plugins/build/distributions/plugin-extracted/
-        if: success()
+        if: success() && github.event_name != 'release'
+
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ide-plugins/build/distributions/plugin-extracted/
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
