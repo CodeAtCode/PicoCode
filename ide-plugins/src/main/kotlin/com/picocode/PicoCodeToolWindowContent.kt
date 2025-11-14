@@ -233,7 +233,7 @@ class PicoCodeToolWindowContent(private val project: Project) {
         // Convert line breaks (but not inside pre/code tags)
         html = html.replace("\n", "<br/>")
         
-        return "<html><body style='font-family: sans-serif; font-size: 12px;'>$html</body></html>"
+        return "<html><body style='font-family: sans-serif; font-size: 11px;'>$html</body></html>"
     }
     
     private fun renderChatHistory() {
@@ -261,6 +261,9 @@ class PicoCodeToolWindowContent(private val project: Project) {
             editorPane.isEditable = false
             editorPane.isOpaque = true
             
+            // Set preferred size to prevent excessive growth
+            editorPane.preferredSize = null
+            
             // Use theme-aware background colors
             editorPane.background = if (msg.sender == "You") 
                 JBColor.namedColor("EditorPane.inactiveBackground", JBColor(0xE6F0FF, 0x2D3239))
@@ -286,6 +289,10 @@ class PicoCodeToolWindowContent(private val project: Project) {
             // Wrap editorPane in a scroll pane for long messages
             val messageScrollPane = JBScrollPane(editorPane)
             messageScrollPane.border = null
+            messageScrollPane.horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+            messageScrollPane.verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+            // Set maximum height to prevent messages from becoming too tall
+            messageScrollPane.maximumSize = Dimension(Integer.MAX_VALUE, 300)
             messagePanel.add(messageScrollPane, BorderLayout.CENTER)
             
             // Add context information if available
