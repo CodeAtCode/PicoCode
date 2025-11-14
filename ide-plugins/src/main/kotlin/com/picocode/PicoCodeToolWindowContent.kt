@@ -4,10 +4,12 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.JBColor
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import javax.swing.*
+import javax.swing.text.html.HTMLEditorKit
 import java.net.HttpURLConnection
 import java.net.URL
 import com.google.gson.Gson
@@ -157,24 +159,76 @@ class PicoCodeToolWindowContent(private val project: Project) {
         return panel
     }
     
+    /**
+     * Convert markdown to HTML for rendering
+     */
+    private fun markdownToHtml(markdown: String): String {
+        var html = markdown
+            // Escape HTML special characters first
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            // Code blocks (```)
+            .replace(Regex("```([\\s\\S]*?)```"), "<pre style='background-color: #f5f5f5; padding: 8px; border-radius: 4px;'><code>$1</code></pre>")
+            // Inline code (`)
+            .replace(Regex("`([^`]+)`"), "<code style='background-color: #f0f0f0; padding: 2px 4px; border-radius: 3px;'>$1</code>")
+            // Bold (**text**)
+            .replace(Regex("\\*\\*([^*]+)\\*\\*"), "<strong>$1</strong>")
+            // Italic (*text*)
+            .replace(Regex("\\*([^*]+)\\*"), "<em>$1</em>")
+            // Headers
+            .replace(Regex("^### (.+)$", RegexOption.MULTILINE), "<h3>$1</h3>")
+            .replace(Regex("^## (.+)$", RegexOption.MULTILINE), "<h2>$1</h2>")
+            .replace(Regex("^# (.+)$", RegexOption.MULTILINE), "<h1>$1</h1>")
+            // Lists
+            .replace(Regex("^- (.+)$", RegexOption.MULTILINE), "<li>$1</li>")
+            .replace(Regex("^\\* (.+)$", RegexOption.MULTILINE), "<li>$1</li>")
+            // Line breaks
+            .replace("\n", "<br/>")
+        
+        // Wrap lists in <ul> tags
+        html = html.replace(Regex("(<li>.*?</li>)+")) { matchResult ->
+            "<ul>${matchResult.value}</ul>"
+        }
+        
+        return "<html><body style='font-family: sans-serif; font-size: 12px;'>$html</body></html>"
+    }
+    
     private fun renderChatHistory() {
         chatPanel.removeAll()
         
         for ((index, msg) in chatHistory.withIndex()) {
             val messagePanel = JPanel(BorderLayout())
+            
+            // Use theme-aware colors
+            val borderColor = if (msg.sender == "You") 
+                JBColor.BLUE 
+            else 
+                JBColor.GRAY
+            
             messagePanel.border = BorderFactory.createCompoundBorder(
                 BorderFactory.createEmptyBorder(5, 5, 5, 5),
-                BorderFactory.createLineBorder(if (msg.sender == "You") java.awt.Color.BLUE else java.awt.Color.GRAY, 1)
+                BorderFactory.createLineBorder(borderColor, 1)
             )
             
-            val textArea = JBTextArea(msg.message)
-            textArea.isEditable = false
-            textArea.lineWrap = true
-            textArea.wrapStyleWord = true
-            textArea.background = if (msg.sender == "You") java.awt.Color(230, 240, 255) else java.awt.Color.WHITE
+            // Use JEditorPane for HTML/Markdown rendering
+            val editorPane = JEditorPane()
+            editorPane.contentType = "text/html"
+            editorPane.editorKit = HTMLEditorKit()
+            editorPane.text = markdownToHtml(msg.message)
+            editorPane.isEditable = false
+            editorPane.isOpaque = true
+            
+            // Use theme-aware background colors
+            editorPane.background = if (msg.sender == "You") 
+                JBColor.namedColor("EditorPane.inactiveBackground", JBColor(0xE6F0FF, 0x2D3239))
+            else 
+                JBColor.namedColor("EditorPane.background", JBColor.background())
+            
+            editorPane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
             
             val headerPanel = JPanel(BorderLayout())
-            headerPanel.add(JLabel("[$msg.sender]"), BorderLayout.WEST)
+            headerPanel.add(JLabel("[${msg.sender}]"), BorderLayout.WEST)
             
             // Add delete button for each message
             val deleteBtn = JButton("×")
@@ -186,7 +240,11 @@ class PicoCodeToolWindowContent(private val project: Project) {
             headerPanel.add(deleteBtn, BorderLayout.EAST)
             
             messagePanel.add(headerPanel, BorderLayout.NORTH)
-            messagePanel.add(textArea, BorderLayout.CENTER)
+            
+            // Wrap editorPane in a scroll pane for long messages
+            val messageScrollPane = JBScrollPane(editorPane)
+            messageScrollPane.border = null
+            messagePanel.add(messageScrollPane, BorderLayout.CENTER)
             
             // Add context information if available
             if (msg.contexts.isNotEmpty()) {
@@ -196,7 +254,8 @@ class PicoCodeToolWindowContent(private val project: Project) {
                 }
                 val contextArea = JBTextArea(contextText.toString())
                 contextArea.isEditable = false
-                contextArea.background = java.awt.Color(250, 250, 250)
+                // Use theme-aware background for context
+                contextArea.background = JBColor.namedColor("Panel.background", JBColor(0xFAFAFA, 0x3C3F41))
                 messagePanel.add(contextArea, BorderLayout.SOUTH)
             }
             
