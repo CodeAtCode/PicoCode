@@ -161,17 +161,38 @@ class PicoCodeToolWindowContent(private val project: Project) {
     
     /**
      * Convert markdown to HTML for rendering
+     * Note: Code block backgrounds use light gray which may need adjustment for dark themes
      */
     private fun markdownToHtml(markdown: String): String {
         var html = markdown
-            // Escape HTML special characters first
+        
+        // Process markdown constructs before escaping HTML
+        // Code blocks (```) - preserve content as-is
+        val codeBlockPlaceholders = mutableListOf<String>()
+        html = html.replace(Regex("```([\\s\\S]*?)```")) { matchResult ->
+            val content = matchResult.groupValues[1]
+            val placeholder = "###CODEBLOCK${codeBlockPlaceholders.size}###"
+            codeBlockPlaceholders.add(content)
+            placeholder
+        }
+        
+        // Inline code (`) - preserve content
+        val inlineCodePlaceholders = mutableListOf<String>()
+        html = html.replace(Regex("`([^`]+)`")) { matchResult ->
+            val content = matchResult.groupValues[1]
+            val placeholder = "###INLINECODE${inlineCodePlaceholders.size}###"
+            inlineCodePlaceholders.add(content)
+            placeholder
+        }
+        
+        // Escape HTML special characters in remaining text
+        html = html
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
-            // Code blocks (```)
-            .replace(Regex("```([\\s\\S]*?)```"), "<pre style='background-color: #f5f5f5; padding: 8px; border-radius: 4px;'><code>$1</code></pre>")
-            // Inline code (`)
-            .replace(Regex("`([^`]+)`"), "<code style='background-color: #f0f0f0; padding: 2px 4px; border-radius: 3px;'>$1</code>")
+        
+        // Apply markdown formatting
+        html = html
             // Bold (**text**)
             .replace(Regex("\\*\\*([^*]+)\\*\\*"), "<strong>$1</strong>")
             // Italic (*text*)
@@ -183,13 +204,34 @@ class PicoCodeToolWindowContent(private val project: Project) {
             // Lists
             .replace(Regex("^- (.+)$", RegexOption.MULTILINE), "<li>$1</li>")
             .replace(Regex("^\\* (.+)$", RegexOption.MULTILINE), "<li>$1</li>")
-            // Line breaks
-            .replace("\n", "<br/>")
         
-        // Wrap lists in <ul> tags
-        html = html.replace(Regex("(<li>.*?</li>)+")) { matchResult ->
-            "<ul>${matchResult.value}</ul>"
+        // Restore code blocks with proper styling
+        codeBlockPlaceholders.forEachIndexed { index, content ->
+            val escapedContent = content
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            html = html.replace("###CODEBLOCK${index}###", 
+                "<pre style='background-color: rgba(127, 127, 127, 0.1); padding: 8px; border-radius: 4px; overflow-x: auto; border: 1px solid rgba(127, 127, 127, 0.2);'><code>$escapedContent</code></pre>")
         }
+        
+        // Restore inline code with proper styling
+        inlineCodePlaceholders.forEachIndexed { index, content ->
+            val escapedContent = content
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            html = html.replace("###INLINECODE${index}###", 
+                "<code style='background-color: rgba(127, 127, 127, 0.15); padding: 2px 4px; border-radius: 3px;'>$escapedContent</code>")
+        }
+        
+        // Wrap consecutive list items in <ul> tags
+        html = html.replace(Regex("(<li>.*?</li>(?:<br/>)?)+")) { matchResult ->
+            "<ul>${matchResult.value.replace("<br/>", "")}</ul>"
+        }
+        
+        // Convert line breaks (but not inside pre/code tags)
+        html = html.replace("\n", "<br/>")
         
         return "<html><body style='font-family: sans-serif; font-size: 12px;'>$html</body></html>"
     }
