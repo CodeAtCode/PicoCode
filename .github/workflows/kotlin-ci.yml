@@ -9,13 +9,15 @@ on:
     branches: [ "main" ]
     paths:
       - 'ide-plugins/**'
+  release:
+    types: [created, published]
 
 jobs:
   build-kotlin-plugin:
     name: 'Build (Java 17)'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -85,11 +87,19 @@ jobs:
             # Remove the original zip
             rm "$PLUGIN_FILE"
           fi
-        if: success()
+        if: success() && github.event_name != 'release'
 
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v4
         with:
           name: intellij-plugin-pr-${{ github.event.pull_request.number || github.run_number }}
           path: ide-plugins/build/distributions/plugin-extracted/
-        if: success()
+        if: success() && github.event_name != 'release'
+
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ide-plugins/build/distributions/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

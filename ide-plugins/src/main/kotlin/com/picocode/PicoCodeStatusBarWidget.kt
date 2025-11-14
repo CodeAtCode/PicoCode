@@ -5,8 +5,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.StatusBar
 import com.intellij.openapi.wm.StatusBarWidget
 import com.intellij.openapi.wm.StatusBarWidgetFactory
-import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.openapi.ui.Messages
 import com.intellij.util.Consumer
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -93,20 +91,24 @@ class PicoCodeStatusBarWidget(private val project: Project) : StatusBarWidget,
     
     override fun getClickConsumer(): Consumer<MouseEvent>? {
         return Consumer { 
-            // Open the PicoCode RAG tool window on click
+            // Open the PicoCode chat dialog on click
             ApplicationManager.getApplication().invokeLater {
-                val toolWindowManager = ToolWindowManager.getInstance(project)
-                val toolWindow = toolWindowManager.getToolWindow("PicoCode RAG")
-                
-                if (toolWindow != null) {
-                    toolWindow.show()
-                } else {
-                    Messages.showInfoMessage(
-                        project,
-                        "PicoCode RAG tool window is not available. Please ensure the plugin is properly installed.",
-                        "PicoCode RAG"
-                    )
+                val chatContent = PicoCodeToolWindowContent(project)
+                val dialog = object : com.intellij.openapi.ui.DialogWrapper(project) {
+                    init {
+                        init()
+                        title = "PicoCode RAG Assistant"
+                    }
+                    
+                    override fun createCenterPanel(): javax.swing.JComponent {
+                        return chatContent.getContent()
+                    }
+                    
+                    override fun createActions(): Array<com.intellij.openapi.ui.DialogWrapper.DialogWrapperAction> {
+                        return emptyArray() // No default OK/Cancel buttons
+                    }
                 }
+                dialog.show()
             }
         }
     }

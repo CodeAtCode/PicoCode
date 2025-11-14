@@ -50,28 +50,36 @@
       <div class="col-lg-4">
         <div class="card">
           <div class="card-body">
-            <h5 class="card-title">Configuration</h5>
-            <p class="mb-1"><strong>Embedding:</strong> {{ config.get("embedding_model") or "not set" }}</p>
-            <p class="mb-0"><strong>Coding:</strong> {{ config.get("coding_model") or "not set" }}</p>
+            <h5 class="card-title" style="cursor: pointer;" onclick="toggleSection('configSection')">
+              Configuration <span id="configToggle">▼</span>
+            </h5>
+            <div id="configSection">
+              <p class="mb-1"><strong>Embedding:</strong> {{ config.get("embedding_model") or "not set" }}</p>
+              <p class="mb-0"><strong>Coding:</strong> {{ config.get("coding_model") or "not set" }}</p>
 
-            <form action="/index" method="post" class="mt-3">
-              <button class="btn btn-primary w-100" type="submit">Index Configured Project</button>
-            </form>
+              <form action="/index" method="post" class="mt-3">
+                <button class="btn btn-primary w-100" type="submit">Index Configured Project</button>
+              </form>
+            </div>
           </div>
         </div>
 
         <div class="card mt-3">
           <div class="card-body">
-            <h5 class="card-title">Add New Project</h5>
-            <div class="mb-2">
-              <label for="new_project_path" class="form-label">Project Path <em>(absolute path)</em></label>
-              <input type="text" id="new_project_path" class="form-control form-control-sm" placeholder="/path/to/your/project">
+            <h5 class="card-title" style="cursor: pointer;" onclick="toggleSection('addProjectSection')">
+              Add New Project <span id="addProjectToggle">▼</span>
+            </h5>
+            <div id="addProjectSection">
+              <div class="mb-2">
+                <label for="new_project_path" class="form-label">Project Path <em>(absolute path)</em></label>
+                <input type="text" id="new_project_path" class="form-control form-control-sm" placeholder="/path/to/your/project">
+              </div>
+              <div class="mb-2">
+                <label for="new_project_name" class="form-label">Project Name (optional)</label>
+                <input type="text" id="new_project_name" class="form-control form-control-sm" placeholder="My Project">
+              </div>
+              <button id="createProjectBtn" class="btn btn-success w-100" type="button">Create & Index another Project</button>
             </div>
-            <div class="mb-2">
-              <label for="new_project_name" class="form-label">Project Name (optional)</label>
-              <input type="text" id="new_project_name" class="form-control form-control-sm" placeholder="My Project">
-            </div>
-            <button id="createProjectBtn" class="btn btn-success w-100" type="button">Create & Index another Project</button>
           </div>
         </div>
 
@@ -152,6 +160,20 @@
   </div>
 
   <script>
+    // Toggle section visibility
+    function toggleSection(sectionId) {
+      const section = document.getElementById(sectionId);
+      const toggle = document.getElementById(sectionId.replace('Section', 'Toggle'));
+      
+      if (section.style.display === 'none') {
+        section.style.display = 'block';
+        toggle.textContent = '▼';
+      } else {
+        section.style.display = 'none';
+        toggle.textContent = '▶';
+      }
+    }
+    
     // Configure marked for markdown rendering
     marked.setOptions({
       highlight: function(code, lang) {
@@ -179,6 +201,14 @@
       const rawHtml = marked.parse(text);
       return DOMPurify.sanitize(rawHtml);
     }
+    
+    function deleteMessage(idx) {
+      if (confirm('Delete this message?')) {
+        chatHistory.splice(idx, 1);
+        localStorage.setItem("picocode_chat_history", JSON.stringify(chatHistory));
+        renderChat();
+      }
+    }
 
     function renderChat() {
       if (chatHistory.length === 0) {
@@ -194,6 +224,10 @@
         let content = `
           <div class="card">
             <div class="card-body">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <strong>${msg.role === 'user' ? 'You' : 'PicoCode'}</strong>
+                <button onclick="deleteMessage(${idx})" class="btn btn-sm btn-outline-danger" style="padding: 2px 8px; font-size: 12px;">×</button>
+              </div>
         `;
         
         // Render message text as markdown for assistant, plain text for user
