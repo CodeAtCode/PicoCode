@@ -4,15 +4,48 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.JBColor
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import javax.swing.*
+import javax.swing.text.html.HTMLEditorKit
 import java.net.HttpURLConnection
 import java.net.URL
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonArray
+
+/**
+ * Custom JEditorPane that tracks viewport width for proper HTML wrapping
+ */
+class WrappingEditorPane : JEditorPane() {
+    override fun getScrollableTracksViewportWidth(): Boolean = true
+    
+    override fun getPreferredSize(): Dimension {
+        // Let the parent determine the width, we only care about height
+        val preferredSize = super.getPreferredSize()
+        
+        // If we're in a scroll pane, use the viewport width
+        val parent = parent
+        if (parent is JViewport) {
+            val viewportWidth = parent.width
+            if (viewportWidth > 0) {
+                // Set a temporary size to calculate the proper height
+                setSize(viewportWidth, Int.MAX_VALUE)
+                preferredSize.width = viewportWidth
+                preferredSize.height = super.getPreferredSize().height
+            }
+        }
+        return preferredSize
+    }
+    
+    override fun getMaximumSize(): Dimension {
+        val maxSize = super.getMaximumSize()
+        maxSize.width = Integer.MAX_VALUE
+        return maxSize
+    }
+}
 
 /**
  * PicoCode RAG Chat Window
@@ -157,24 +190,121 @@ class PicoCodeToolWindowContent(private val project: Project) {
         return panel
     }
     
+    /**
+     * Convert markdown to HTML for rendering
+     * Note: Code block backgrounds use light gray which may need adjustment for dark themes
+     */
+    private fun markdownToHtml(markdown: String): String {
+        var html = markdown
+        
+        // Process markdown constructs before escaping HTML
+        // Code blocks (```) - preserve content as-is
+        val codeBlockPlaceholders = mutableListOf<String>()
+        html = html.replace(Regex("```([\\s\\S]*?)```")) { matchResult ->
+            val content = matchResult.groupValues[1]
+            val placeholder = "###CODEBLOCK${codeBlockPlaceholders.size}###"
+            codeBlockPlaceholders.add(content)
+            placeholder
+        }
+        
+        // Inline code (`) - preserve content
+        val inlineCodePlaceholders = mutableListOf<String>()
+        html = html.replace(Regex("`([^`]+)`")) { matchResult ->
+            val content = matchResult.groupValues[1]
+            val placeholder = "###INLINECODE${inlineCodePlaceholders.size}###"
+            inlineCodePlaceholders.add(content)
+            placeholder
+        }
+        
+        // Escape HTML special characters in remaining text
+        html = html
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        
+        // Apply markdown formatting
+        html = html
+            // Bold (**text**)
+            .replace(Regex("\\*\\*([^*]+)\\*\\*"), "<strong>$1</strong>")
+            // Italic (*text*)
+            .replace(Regex("\\*([^*]+)\\*"), "<em>$1</em>")
+            // Headers
+            .replace(Regex("^### (.+)$", RegexOption.MULTILINE), "<h3>$1</h3>")
+            .replace(Regex("^## (.+)$", RegexOption.MULTILINE), "<h2>$1</h2>")
+            .replace(Regex("^# (.+)$", RegexOption.MULTILINE), "<h1>$1</h1>")
+            // Lists
+            .replace(Regex("^- (.+)$", RegexOption.MULTILINE), "<li>$1</li>")
+            .replace(Regex("^\\* (.+)$", RegexOption.MULTILINE), "<li>$1</li>")
+        
+        // Restore code blocks with proper styling and wrapping
+        codeBlockPlaceholders.forEachIndexed { index, content ->
+            val escapedContent = content
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            html = html.replace("###CODEBLOCK${index}###", 
+                "<pre style='background-color: rgba(127, 127, 127, 0.1); padding: 8px; border-radius: 4px; border: 1px solid rgba(127, 127, 127, 0.2); white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;'><code>$escapedContent</code></pre>")
+        }
+        
+        // Restore inline code with proper styling and wrapping
+        inlineCodePlaceholders.forEachIndexed { index, content ->
+            val escapedContent = content
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            html = html.replace("###INLINECODE${index}###", 
+                "<code style='background-color: rgba(127, 127, 127, 0.15); padding: 2px 4px; border-radius: 3px; word-wrap: break-word; overflow-wrap: break-word;'>$escapedContent</code>")
+        }
+        
+        // Wrap consecutive list items in <ul> tags
+        html = html.replace(Regex("(<li>.*?</li>(?:<br/>)?)+")) { matchResult ->
+            "<ul>${matchResult.value.replace("<br/>", "")}</ul>"
+        }
+        
+        // Convert line breaks (but not inside pre/code tags)
+        html = html.replace("\n", "<br/>")
+        
+        return "<html><body style='font-family: sans-serif; font-size: 11px; width: 100%; word-wrap: break-word; overflow-wrap: break-word;'>$html</body></html>"
+    }
+    
     private fun renderChatHistory() {
         chatPanel.removeAll()
         
         for ((index, msg) in chatHistory.withIndex()) {
             val messagePanel = JPanel(BorderLayout())
+            
+            // Ensure messagePanel respects the container width
+            messagePanel.maximumSize = Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE)
+            
+            // Use theme-aware colors
+            val borderColor = if (msg.sender == "You") 
+                JBColor.BLUE 
+            else 
+                JBColor.GRAY
+            
             messagePanel.border = BorderFactory.createCompoundBorder(
                 BorderFactory.createEmptyBorder(5, 5, 5, 5),
-                BorderFactory.createLineBorder(if (msg.sender == "You") java.awt.Color.BLUE else java.awt.Color.GRAY, 1)
+                BorderFactory.createLineBorder(borderColor, 1)
             )
             
-            val textArea = JBTextArea(msg.message)
-            textArea.isEditable = false
-            textArea.lineWrap = true
-            textArea.wrapStyleWord = true
-            textArea.background = if (msg.sender == "You") java.awt.Color(230, 240, 255) else java.awt.Color.WHITE
+            // Use JEditorPane for HTML/Markdown rendering with proper width tracking
+            val editorPane = WrappingEditorPane()
+            editorPane.contentType = "text/html"
+            editorPane.editorKit = HTMLEditorKit()
+            editorPane.text = markdownToHtml(msg.message)
+            editorPane.isEditable = false
+            editorPane.isOpaque = true
+            
+            // Use theme-aware background colors
+            editorPane.background = if (msg.sender == "You") 
+                JBColor.namedColor("EditorPane.inactiveBackground", JBColor(0xE6F0FF, 0x2D3239))
+            else 
+                JBColor.namedColor("EditorPane.background", JBColor.background())
+            
+            editorPane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
             
             val headerPanel = JPanel(BorderLayout())
-            headerPanel.add(JLabel("[$msg.sender]"), BorderLayout.WEST)
+            headerPanel.add(JLabel("[${msg.sender}]"), BorderLayout.WEST)
             
             // Add delete button for each message
             val deleteBtn = JButton("×")
@@ -186,7 +316,15 @@ class PicoCodeToolWindowContent(private val project: Project) {
             headerPanel.add(deleteBtn, BorderLayout.EAST)
             
             messagePanel.add(headerPanel, BorderLayout.NORTH)
-            messagePanel.add(textArea, BorderLayout.CENTER)
+            
+            // Wrap editorPane in a scroll pane for long messages
+            val messageScrollPane = JBScrollPane(editorPane)
+            messageScrollPane.border = null
+            messageScrollPane.horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+            messageScrollPane.verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+            // Set maximum height to prevent messages from becoming too tall
+            messageScrollPane.maximumSize = Dimension(Integer.MAX_VALUE, 300)
+            messagePanel.add(messageScrollPane, BorderLayout.CENTER)
             
             // Add context information if available
             if (msg.contexts.isNotEmpty()) {
@@ -196,7 +334,8 @@ class PicoCodeToolWindowContent(private val project: Project) {
                 }
                 val contextArea = JBTextArea(contextText.toString())
                 contextArea.isEditable = false
-                contextArea.background = java.awt.Color(250, 250, 250)
+                // Use theme-aware background for context
+                contextArea.background = JBColor.namedColor("Panel.background", JBColor(0xFAFAFA, 0x3C3F41))
                 messagePanel.add(contextArea, BorderLayout.SOUTH)
             }
             
