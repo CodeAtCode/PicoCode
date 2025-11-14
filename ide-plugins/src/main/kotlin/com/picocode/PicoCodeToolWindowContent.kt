@@ -23,13 +23,27 @@ class WrappingEditorPane : JEditorPane() {
     override fun getScrollableTracksViewportWidth(): Boolean = true
     
     override fun getPreferredSize(): Dimension {
-        // Ensure the preferred width doesn't exceed the parent's width
+        // Let the parent determine the width, we only care about height
         val preferredSize = super.getPreferredSize()
+        
+        // If we're in a scroll pane, use the viewport width
         val parent = parent
-        if (parent != null && parent.width > 0) {
-            preferredSize.width = parent.width
+        if (parent is JViewport) {
+            val viewportWidth = parent.width
+            if (viewportWidth > 0) {
+                // Set a temporary size to calculate the proper height
+                setSize(viewportWidth, Int.MAX_VALUE)
+                preferredSize.width = viewportWidth
+                preferredSize.height = super.getPreferredSize().height
+            }
         }
         return preferredSize
+    }
+    
+    override fun getMaximumSize(): Dimension {
+        val maxSize = super.getMaximumSize()
+        maxSize.width = Integer.MAX_VALUE
+        return maxSize
     }
 }
 
@@ -258,6 +272,9 @@ class PicoCodeToolWindowContent(private val project: Project) {
         
         for ((index, msg) in chatHistory.withIndex()) {
             val messagePanel = JPanel(BorderLayout())
+            
+            // Ensure messagePanel respects the container width
+            messagePanel.maximumSize = Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE)
             
             // Use theme-aware colors
             val borderColor = if (msg.sender == "You") 
