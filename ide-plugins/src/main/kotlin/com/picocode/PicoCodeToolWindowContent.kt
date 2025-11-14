@@ -17,6 +17,13 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonArray
 
 /**
+ * Custom JEditorPane that tracks viewport width for proper HTML wrapping
+ */
+class WrappingEditorPane : JEditorPane() {
+    override fun getScrollableTracksViewportWidth(): Boolean = true
+}
+
+/**
  * PicoCode RAG Chat Window
  * Simple chat interface that communicates with PicoCode backend
  * Assumes PicoCode server is already running
@@ -233,7 +240,7 @@ class PicoCodeToolWindowContent(private val project: Project) {
         // Convert line breaks (but not inside pre/code tags)
         html = html.replace("\n", "<br/>")
         
-        return "<html><body style='font-family: sans-serif; font-size: 11px;'>$html</body></html>"
+        return "<html><body style='font-family: sans-serif; font-size: 11px; width: 100%;'>$html</body></html>"
     }
     
     private fun renderChatHistory() {
@@ -253,16 +260,13 @@ class PicoCodeToolWindowContent(private val project: Project) {
                 BorderFactory.createLineBorder(borderColor, 1)
             )
             
-            // Use JEditorPane for HTML/Markdown rendering
-            val editorPane = JEditorPane()
+            // Use JEditorPane for HTML/Markdown rendering with proper width tracking
+            val editorPane = WrappingEditorPane()
             editorPane.contentType = "text/html"
             editorPane.editorKit = HTMLEditorKit()
             editorPane.text = markdownToHtml(msg.message)
             editorPane.isEditable = false
             editorPane.isOpaque = true
-            
-            // Set preferred size to prevent excessive growth
-            editorPane.preferredSize = null
             
             // Use theme-aware background colors
             editorPane.background = if (msg.sender == "You") 
