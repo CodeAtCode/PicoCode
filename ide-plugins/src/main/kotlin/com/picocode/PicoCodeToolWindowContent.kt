@@ -21,6 +21,16 @@ import com.google.gson.JsonArray
  */
 class WrappingEditorPane : JEditorPane() {
     override fun getScrollableTracksViewportWidth(): Boolean = true
+    
+    override fun getPreferredSize(): Dimension {
+        // Ensure the preferred width doesn't exceed the parent's width
+        val preferredSize = super.getPreferredSize()
+        val parent = parent
+        if (parent != null && parent.width > 0) {
+            preferredSize.width = parent.width
+        }
+        return preferredSize
+    }
 }
 
 /**
@@ -212,24 +222,24 @@ class PicoCodeToolWindowContent(private val project: Project) {
             .replace(Regex("^- (.+)$", RegexOption.MULTILINE), "<li>$1</li>")
             .replace(Regex("^\\* (.+)$", RegexOption.MULTILINE), "<li>$1</li>")
         
-        // Restore code blocks with proper styling
+        // Restore code blocks with proper styling and wrapping
         codeBlockPlaceholders.forEachIndexed { index, content ->
             val escapedContent = content
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
             html = html.replace("###CODEBLOCK${index}###", 
-                "<pre style='background-color: rgba(127, 127, 127, 0.1); padding: 8px; border-radius: 4px; overflow-x: auto; border: 1px solid rgba(127, 127, 127, 0.2);'><code>$escapedContent</code></pre>")
+                "<pre style='background-color: rgba(127, 127, 127, 0.1); padding: 8px; border-radius: 4px; border: 1px solid rgba(127, 127, 127, 0.2); white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;'><code>$escapedContent</code></pre>")
         }
         
-        // Restore inline code with proper styling
+        // Restore inline code with proper styling and wrapping
         inlineCodePlaceholders.forEachIndexed { index, content ->
             val escapedContent = content
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
             html = html.replace("###INLINECODE${index}###", 
-                "<code style='background-color: rgba(127, 127, 127, 0.15); padding: 2px 4px; border-radius: 3px;'>$escapedContent</code>")
+                "<code style='background-color: rgba(127, 127, 127, 0.15); padding: 2px 4px; border-radius: 3px; word-wrap: break-word; overflow-wrap: break-word;'>$escapedContent</code>")
         }
         
         // Wrap consecutive list items in <ul> tags
@@ -240,7 +250,7 @@ class PicoCodeToolWindowContent(private val project: Project) {
         // Convert line breaks (but not inside pre/code tags)
         html = html.replace("\n", "<br/>")
         
-        return "<html><body style='font-family: sans-serif; font-size: 11px; width: 100%;'>$html</body></html>"
+        return "<html><body style='font-family: sans-serif; font-size: 11px; width: 100%; word-wrap: break-word; overflow-wrap: break-word;'>$html</body></html>"
     }
     
     private fun renderChatHistory() {
