@@ -51,7 +51,7 @@
       <div class="col-lg-4">
         <div class="card">
           <div class="card-body">
-            <h5 class="card-title" style="cursor: pointer;" onclick="toggleSection('configSection')">
+            <h5 class="card-title toggle-section" style="cursor: pointer;" data-section="configSection">
               Configuration <span id="configToggle">▼</span>
             </h5>
             <div id="configSection">
@@ -67,7 +67,7 @@
 
         <div class="card mt-3">
           <div class="card-body">
-            <h5 class="card-title" style="cursor: pointer;" onclick="toggleSection('addProjectSection')">
+            <h5 class="card-title toggle-section" style="cursor: pointer;" data-section="addProjectSection">
               Add New Project <span id="addProjectToggle">▼</span>
             </h5>
             <div id="addProjectSection">
@@ -162,20 +162,6 @@
 
   <script>
     $(document).ready(function() {
-      // Toggle section visibility
-      window.toggleSection = function(sectionId) {
-        const $section = $('#' + sectionId);
-        const $toggle = $('#' + sectionId.replace('Section', 'Toggle'));
-        
-        if ($section.css('display') === 'none') {
-          $section.show();
-          $toggle.text('▼');
-        } else {
-          $section.hide();
-          $toggle.text('▶');
-        }
-      };
-      
       // Configure marked for markdown rendering
       marked.setOptions({
         highlight: function(code, lang) {
@@ -204,13 +190,30 @@
         return DOMPurify.sanitize(rawHtml);
       }
       
-      window.deleteMessage = function(idx) {
+      // Toggle section visibility using event delegation
+      $(document).on('click', '.toggle-section', function() {
+        const sectionId = $(this).data('section');
+        const $section = $('#' + sectionId);
+        const $toggle = $('#' + sectionId.replace('Section', 'Toggle'));
+        
+        if ($section.css('display') === 'none') {
+          $section.show();
+          $toggle.text('▼');
+        } else {
+          $section.hide();
+          $toggle.text('▶');
+        }
+      });
+      
+      // Delete message using event delegation
+      $(document).on('click', '.delete-message-btn', function() {
+        const idx = $(this).data('index');
         if (confirm('Delete this message?')) {
           chatHistory.splice(idx, 1);
           localStorage.setItem("picocode_chat_history", JSON.stringify(chatHistory));
           renderChat();
         }
-      };
+      });
 
       function renderChat() {
         if (chatHistory.length === 0) {
@@ -227,7 +230,7 @@
               <div class="card-body">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                   <strong>${msg.role === 'user' ? 'You' : 'PicoCode'}</strong>
-                  <button onclick="deleteMessage(${idx})" class="btn btn-sm btn-outline-danger" style="padding: 2px 8px; font-size: 12px;">×</button>
+                  <button class="btn btn-sm btn-outline-danger delete-message-btn" data-index="${idx}" style="padding: 2px 8px; font-size: 12px;">×</button>
                 </div>
           `;
           
