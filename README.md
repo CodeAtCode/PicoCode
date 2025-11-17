@@ -4,7 +4,16 @@
 
 > 🤖 **Note**: This project was fully generated and developed using GitHub Copilot.
 
+## Screenshots
+
+### Web UI
+
 <img src="https://github.com/user-attachments/assets/a6dc6647-309a-4103-864a-e4cec94b7962" />
+
+### PyCharm (Intellij Plugin)
+
+<img width="734" height="708" alt="immagine" src="https://github.com/user-attachments/assets/79bc6f8a-6285-42ab-8b60-6bc426879d94" />
+
 
 Are you looking for a simple way to asks question to your codebase using the inference provider you want without to be locked to a specific service?
 This tool is a way to achieve this!
