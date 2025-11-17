@@ -20,6 +20,8 @@ This tool is a way to achieve this!
 
 ## Overview
 
+Check the [blogpost about the project](https://daniele.tech/2025/11/picocode-ai-self-hosted-local-codebase-assistant-rag/) that has more info!
+
 - **Production-ready RAG backend** with per-project persistent storage
 - **PyCharm/IDE integration** via REST API (see [REST_API.md](REST_API.md))
 - **Per-project databases**: Each project gets isolated SQLite database
