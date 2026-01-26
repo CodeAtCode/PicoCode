@@ -1,0 +1,54 @@
+body { padding-top: 1.5rem; padding-bottom: 3rem; background:#f7f9fb; }
+.chat-window { height: 62vh; overflow:auto; padding:.75rem; background:#ffffff; border:1px solid #e9ecef; border-radius:8px; }
+.msg { margin-bottom:.75rem; display:flex; gap:.75rem; }
+.msg.user { justify-content:flex-end; }
+.msg.assistant { justify-content:flex-start; }
+.msg .card { max-width:78%; border-radius:10px; box-shadow:none; }
+.msg.user .card { background:#e9f5ff; border:1px solid #cfeeff; }
+.msg.assistant .card { background:#f8f9fa; border:1px solid #e9ecef; }
+.meta { font-size:.80rem; color:#6c757d; }
+.actions { display:flex; gap:.25rem; align-items:center; }
+.spinner-small { width:1rem; height:1rem; border:2px solid rgba(0,0,0,0.12); border-top-color:#0d6efd; border-radius:50%; animation:spin 1s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.context-list { font-family:monospace; font-size:.85rem; color:#333; }
+.context-item { margin-bottom: 1rem; padding: 0.75rem; background: #f8f9fa; border-left: 3px solid #0d6efd; border-radius: 4px; }
+.context-item-header { font-weight: bold; margin-bottom: 0.5rem; color: #0d6efd; }
+.context-item-content { font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; background: #ffffff; padding: 0.5rem; border-radius: 4px; max-height: 200px; overflow-y: auto; }
+.markdown-content { line-height: 1.6; }
+.markdown-content pre { background: #f6f8fa; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+.markdown-content code { background: #f6f8fa; padding: 0.2em 0.4em; border-radius: 3px; font-size: 85%; }
+.markdown-content pre code { background: transparent; padding: 0; }
+.controls-area { display:flex; gap:.5rem; align-items:center; }
+.empty-state { height:62vh; display:flex; align-items:center; justify-content:center; color:#6c757d; }
+.btn-sm-icon { padding:.25rem .5rem; font-size:.85rem; }
+.progress-info { font-size: .95rem; color: #333; display:flex; align-items:center; gap: 0.5rem; }
+.project-item { cursor: pointer; }
+.project-item:hover { background-color: #f8f9fa; }
+.project-item.active { background-color: #e7f3ff; border-left: 3px solid #0d6efd; }
+
+/* ---- NEW: Focus outlines (visible for keyboard users) ---- */
+:focus-visible {
+  outline: 3px solid #0d6efd;      /* Bootstrap primary colour */
+  outline-offset: 2px;
+}
+
+body.dark-mode :focus-visible {
+  outline-color: #66b2ff;
+}
+
+button:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+input:focus-visible {
+  outline: 3px solid #0d6efd;
+}
+/* ---- END focus outlines ---- */
+
+/* Copy button styling */
+.copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0.7;
+}
+pre:hover .copy-btn { opacity: 1; }

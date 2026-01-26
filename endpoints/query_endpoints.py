@@ -44,7 +44,6 @@ def api_query(http_request: Request, request: QueryRequest):
     - **project_id**: Project identifier
     - **query**: Original query text
     """
-    # Rate limiting
     client_ip = _get_client_ip(http_request)
     allowed, retry_after = query_limiter.is_allowed(client_ip)
     if not allowed:
@@ -55,7 +54,6 @@ def api_query(http_request: Request, request: QueryRequest):
         )
     
     try:
-        # Use SearchService for better separation of concerns
         result = SearchService.semantic_search(
             project_id=request.project_id,
             query=request.query,
@@ -64,10 +62,7 @@ def api_query(http_request: Request, request: QueryRequest):
         )
         return JSONResponse(result)
     except ValueError as e:
-        # ValueError for not found or not indexed
-        # Log the full error but return generic message
         logger.warning(f"Query validation failed: {e}")
-        # Return safe, generic error messages
         if "not found" in str(e).lower():
             return JSONResponse({"error": "Project not found"}, status_code=404)
         elif "not indexed" in str(e).lower():

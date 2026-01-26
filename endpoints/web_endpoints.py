@@ -48,7 +48,6 @@ def api_health():
         "features": ["rag", "per-project-db", "pycharm-api", "incremental-indexing", "rate-limiting", "caching", "file-watcher"]
     }
     
-    # Add file watcher status if available
     if _file_watcher:
         health_data["file_watcher"] = _file_watcher.get_status()
     
@@ -94,20 +93,16 @@ def delete_project_endpoint(project_id: str):
 def index_project(background_tasks: BackgroundTasks, project_path: str = None):
     """Index/re-index the default project or specified path."""
     try:
-        # Use configured path or provided path
         path_to_index = project_path or CFG.get("local_path")
         if not path_to_index or not os.path.exists(path_to_index):
             raise HTTPException(status_code=400, detail="Project path does not exist")
         
-        # Get or create project
         project = get_or_create_project(path_to_index)
         project_id = project["id"]
         db_path = project["database_path"]
         
-        # Update status to indexing
         update_project_status(project_id, "indexing")
         
-        # Start background indexing
         venv_path = CFG.get("venv_path")
         
         def index_callback():
@@ -147,17 +142,14 @@ async def code_endpoint(request: Request):
     explicit_context = payload.get("context", "") or ""
     use_rag = bool(payload.get("use_rag", True))
     
-    # Get project_id - if not provided, use the first available project
     project_id = payload.get("project_id")
     
     if not project_id:
-        # Try to get default project or first available
         projects = list_projects()
         if not projects:
             return JSONResponse({"error": "No projects available. Please index a project first."}, status_code=400)
         project_id = projects[0]["id"]
     
-    # Get project and its database
     try:
         project = get_project_by_id(project_id)
         if not project:
@@ -165,7 +157,6 @@ async def code_endpoint(request: Request):
         
         database_path = project["database_path"]
         
-        # Check if project has been indexed
         stats = get_project_stats(database_path)
         if stats["file_count"] == 0:
             return JSONResponse({"error": "Project not indexed yet. Please run indexing first."}, status_code=400)
@@ -181,12 +172,9 @@ async def code_endpoint(request: Request):
     used_context = []
     combined_context = explicit_context or ""
 
-    # If RAG requested, perform semantic search and build context
     if use_rag:
         try:
-            # Retrieve with content (always included)
             retrieved = search_semantic(prompt, database_path, top_k=top_k)
-            # Build context WITH actual file content for better RAG results
             context_parts = []
             total_len = len(combined_context)
             for r in retrieved:
@@ -194,11 +182,9 @@ async def code_endpoint(request: Request):
                 path = r.get("path", "")
                 score = r.get("score", 0)
                 
-                # Include file path, score, and actual content
                 part = f"File: {path} (score: {score:.4f})\n{content}\n"
                 
                 if total_len + len(part) > TOTAL_CONTEXT_LIMIT:
-                    # If full content doesn't fit, try to include at least partial content
                     remaining = TOTAL_CONTEXT_LIMIT - total_len
                     if remaining > 200:  # Only include if we have meaningful space
                         truncated_content = content[:remaining - 100] + "..."
@@ -231,7 +217,6 @@ async def code_endpoint(request: Request):
             logger.exception(f"RAG search failed: {e}")
             used_context = []
 
-    # Call the coding model with prompt and combined_context
     try:
         resp = call_coding_model(prompt, combined_context)
     except Exception as e:

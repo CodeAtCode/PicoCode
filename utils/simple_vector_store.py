@@ -8,7 +8,6 @@ continue working while leveraging LlamaIndex's SimpleVectorStore implementation.
 
 from llama_index.core.vector_stores import SimpleVectorStore
 
-# Global cache of stores keyed by database_path
 _vector_stores: dict[str, SimpleVectorStore] = {}
 
 

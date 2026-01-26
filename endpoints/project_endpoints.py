@@ -46,7 +46,6 @@ def api_create_project(request: CreateProjectRequest):
     try:
         project = get_or_create_project(request.path, request.name)
         
-        # Add project to file watcher if available
         try:
             from main import _file_watcher
             if _file_watcher and _file_watcher.is_running():
@@ -56,11 +55,9 @@ def api_create_project(request: CreateProjectRequest):
         
         return JSONResponse(project)
     except ValueError as e:
-        # ValueError is expected for invalid inputs, safe to show message
         logger.warning(f"Validation error creating project: {e}")
         return JSONResponse({"error": "Invalid project path"}, status_code=400)
     except RuntimeError as e:
-        # RuntimeError may contain sensitive details, use generic message
         logger.error(f"Runtime error creating project: {e}")
         return JSONResponse({"error": "Database operation failed"}, status_code=500)
     except Exception as e:
@@ -102,7 +99,6 @@ def api_get_project(project_id: str):
         if not project:
             return JSONResponse({"error": "Project not found"}, status_code=404)
         
-        # Add indexing statistics if project has a database
         db_path = project.get("database_path")
         
         if db_path and os.path.exists(db_path):
@@ -110,7 +106,6 @@ def api_get_project(project_id: str):
                 from db.operations import get_project_stats, get_project_metadata
                 stats = get_project_stats(db_path)
                 
-                # Get total files from metadata (stored during indexing for performance)
                 total_files_str = get_project_metadata(db_path, "total_files")
                 total_files = int(total_files_str) if total_files_str else 0
                 
@@ -181,7 +176,6 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
     Returns immediately with status "indexing".
     Poll project status to check completion.
     """
-    # Rate limiting for indexing operations (more strict)
     client_ip = _get_client_ip(http_request)
     allowed, retry_after = indexing_limiter.is_allowed(client_ip)
     if not allowed:
@@ -202,17 +196,14 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
         if not os.path.exists(project_path):
             return JSONResponse({"error": "Project path does not exist"}, status_code=400)
         
-        # Update status to indexing
         update_project_status(request.project_id, "indexing")
         
-        # Start background indexing with incremental flag
         venv_path = CFG.get("venv_path")
         incremental = request.incremental if request.incremental is not None else True
         
         def index_callback():
             try:
                 from ai.analyzer import analyze_local_path_sync
-                # Use sync version directly with incremental flag
                 analyze_local_path_sync(project_path, db_path, venv_path, MAX_FILE_SIZE, CFG, incremental=incremental)
                 update_project_status(request.project_id, "ready", datetime.utcnow().isoformat())
             except Exception as e:

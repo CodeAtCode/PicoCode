@@ -10,7 +10,6 @@ import concurrent.futures
 import threading
 
 from db.operations import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
-# Vector store utilities are now handled via SimpleVectorStore
 
 from llama_index.core.schema import TextNode
 from llama_index.core.vector_stores import SimpleVectorStore
@@ -23,10 +22,8 @@ from utils.logger import get_logger
 
 import logging
 
-# reduce noise from httpx used by external libs
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# language detection by extension
 EXT_LANG = {
     ".py": "python",
     ".js": "javascript",
@@ -42,23 +39,17 @@ EXT_LANG = {
     ".md": "markdown",
 }
 
-# Chunking parameters (tunable)
 CHUNK_SIZE = 800         # characters per chunk
 CHUNK_OVERLAP = 100      # overlapping characters between chunks
 
 EMBEDDING_CONCURRENCY = 4
-# Increase batch size for parallel processing
 EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
 PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
-# Timeout for future.result() must account for retries: (max_retries + 1) × SDK_timeout + buffer
-# With SDK timeout of 15s and max_retries=2, this allows 3 × 15s = 45s + 15s buffer = 60s
 EMBEDDING_TIMEOUT = 15  # Reduced timeout in seconds for each embedding API call (including retries)
 FILE_PROCESSING_TIMEOUT = 120  # Reduced timeout in seconds for processing a single file (2 minutes)
 
-# Adaptive thread pool sizing based on system resources
 import os
 cpu_count = os.cpu_count() or 1
-# Use a fraction of CPUs for file processing and embedding to avoid oversubscription
 _FILE_EXECUTOR_WORKERS = max(2, min(8, cpu_count // 2))
 _EMBEDDING_EXECUTOR_WORKERS = max(2, min(8, cpu_count // 2))
 _FILE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_FILE_EXECUTOR_WORKERS)
@@ -66,15 +57,12 @@ _EMBEDDING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_EMBEDDI
 
 logger = get_logger(__name__)
 
-# Initialize llama-index embedding client
-# Initialize embedding client lazily; handle missing API key gracefully
 try:
     _embedding_client = OpenAICompatibleEmbedding()
 except Exception as e:
     _embedding_client = None
     logger.warning(f"OpenAICompatibleEmbedding could not be initialized: {e}")
 
-# Thread-local storage to track execution state inside futures
 _thread_state = threading.local()
 
 
@@ -84,7 +72,6 @@ def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, fil
     The semaphore is acquired in the worker thread, not the main thread.
     Tracks execution state for debugging timeout issues.
     """
-    # Initialize thread state tracking
     _thread_state.stage = "acquiring_semaphore"
     _thread_state.file_path = file_path
     _thread_state.chunk_index = chunk_index
@@ -93,7 +80,6 @@ def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, fil
     semaphore.acquire()
     try:
         _thread_state.stage = "calling_embed_text"
-        # Use llama-index embedding client
         if _embedding_client is None:
             logger.error("Embedding client not initialized; cannot generate embedding.")
             raise RuntimeError("Embedding client not initialized")
@@ -125,7 +111,6 @@ def detect_language(path: str):
 
 
 
-# Main synchronous processing for a single file
 def _process_file_sync(
     semaphore: threading.Semaphore,
     database_path: str,
@@ -146,11 +131,9 @@ def _process_file_sync(
         total_files: Total number of files to process
     """
     try:
-        # read file content
         try:
             with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
                 content = fh.read()
-            # Get file modification time
             mtime = os.path.getmtime(full_path)
         except Exception:
             return {"stored": False, "embedded": False, "skipped": False}
@@ -162,15 +145,12 @@ def _process_file_sync(
         if lang == "text":
             return {"stored": False, "embedded": False, "skipped": False}
 
-        # Compute hash for change detection
         import hashlib
         file_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
         
-        # Check if file needs reindexing (incremental mode)
         if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
             return {"stored": False, "embedded": False, "skipped": True}
 
-        # store file (synchronous DB writer) with metadata
         try:
             fid = store_file(database_path, rel_path, content, lang, mtime, file_hash)
         except Exception:
@@ -183,7 +163,6 @@ def _process_file_sync(
         if isinstance(cfg, dict):
             embedding_model = cfg.get("embedding_model")
 
-        # Use LlamaIndex SimpleNodeParser for chunking
         parser = SimpleNodeParser(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         doc_obj = Document(text=content, extra_info={"path": rel_path, "lang": lang})
         nodes = parser.get_nodes_from_documents([doc_obj])
@@ -191,34 +170,28 @@ def _process_file_sync(
         if not chunks:
             chunks = [content]
 
-        # Ensure SimpleVectorStore is initialized (lazy)
         _ = SimpleVectorStore()
 
         embedded_any = False
 
-        # Collect all chunks first for batch processing
         chunk_tasks = []
         for idx, chunk in enumerate(chunks):
             chunk_doc = Document(text=chunk, extra_info={"path": rel_path, "lang": lang, "chunk_index": idx, "chunk_count": len(chunks)})
             chunk_tasks.append((idx, chunk_doc))
 
-        # Process embeddings in parallel batches for better throughput
         num_batches = math.ceil(len(chunk_tasks) / EMBEDDING_BATCH_SIZE)
         for batch_num, batch_start in enumerate(range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE), 1):
             batch = chunk_tasks[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
             
-            # Log batch processing start
             batch_start_time = time.time()
             
             embedding_futures = []
             
             for idx, chunk_doc in batch:
-                # Submit task to executor; semaphore will be acquired inside the worker
                 embedding_start_time = time.time()
                 future = _EMBEDDING_EXECUTOR.submit(_get_embedding_with_semaphore, semaphore, chunk_doc.text, rel_path, idx, embedding_model)
                 embedding_futures.append((idx, chunk_doc, future, embedding_start_time))
 
-            # Wait for batch to complete and store results
             saved_count = 0
             failed_count = 0
             for idx, chunk_doc, future, embedding_start_time in embedding_futures:
@@ -227,7 +200,6 @@ def _process_file_sync(
                 except concurrent.futures.TimeoutError:
                     elapsed = time.time() - embedding_start_time
                     
-                    # Try to get exception info from the future if available
                     future_exception = None
                     try:
                         future_exception = future.exception(timeout=0.1)
@@ -236,7 +208,6 @@ def _process_file_sync(
                     except Exception as e:
                         future_exception = e
                     
-                    # Build diagnostic information
                     diagnostic_info = [
                         f"Future timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx}:",
                         f"  - Elapsed time: {elapsed:.2f}s",
@@ -248,7 +219,6 @@ def _process_file_sync(
                     else:
                         diagnostic_info.append(f"  - Future exception: None (still running or completed)")
                     
-                    # Add information about running status
                     if future.running():
                         diagnostic_info.append(f"  - Future.running(): True - worker thread is still executing")
                     elif future.done():
@@ -265,7 +235,6 @@ def _process_file_sync(
 
                 if emb:
                     try:
-                        # Add node with embedding to SimpleVectorStore
                         vector_store = SimpleVectorStore()
                         node = TextNode(
                             text=chunk_doc.text,
@@ -311,13 +280,11 @@ def analyze_local_path_sync(
     
     start_time = time.time()
     
-    # Store project path metadata for later use
     try:
         set_project_metadata(database_path, "project_path", local_path)
     except Exception as e:
         logger.warning(f"Failed to store project path metadata: {e}")
     
-    # Discover files
     logger.info("Collecting files to index...")
     file_paths: List[Dict[str, str]] = []
     for root, _, files in os.walk(local_path):
@@ -332,14 +299,12 @@ def analyze_local_path_sync(
             file_paths.append({"full": full, "rel": rel})
     total_files = len(file_paths)
     logger.info(f"Found {total_files} files to index")
-    # Store total file count early so UI can display it during indexing
     try:
         from db.operations import set_project_metadata
         set_project_metadata(database_path, "total_files", str(total_files))
     except Exception as e:
         logger.warning(f"Failed to store early total_files metadata: {e}")
     
-    # Build Document list
     documents: List[Document] = []
     for f in file_paths:
         try:
@@ -353,7 +318,6 @@ def analyze_local_path_sync(
         except Exception:
             logger.exception("Failed to read %s", f["full"])
     
-    # Build index with SimpleVectorStore and OpenAI embeddings
     vector_store = SimpleVectorStore()
     embed_model = OpenAICompatibleEmbedding()
     parser = SimpleNodeParser(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
@@ -364,7 +328,6 @@ def analyze_local_path_sync(
         node_parser=parser,
     )
     
-    # Store metadata about indexing
     duration = time.time() - start_time
     logger.info(f"Indexing completed: {len(documents)} documents indexed in {duration:.2f}s")
     try:
@@ -378,7 +341,6 @@ def analyze_local_path_sync(
     except Exception:
         logger.exception("Failed to store indexing metadata")
     
-    # Store uv_detected.json for reference (non‑critical)
     try:
         store_file(
             database_path,
@@ -389,7 +351,6 @@ def analyze_local_path_sync(
     except Exception:
         pass
     
-    # Return the index for potential further use (optional)
     return index
 
 
@@ -421,7 +382,6 @@ def search_semantic(query: str, database_path: str, top_k: int = 5):
         List of dicts with file_id, path, chunk_index, score, and content
     """
     try:
-        # Use llama-index for semantic search
         from .llama_integration import llama_index_search
         
         docs = llama_index_search(query, database_path, top_k=top_k)

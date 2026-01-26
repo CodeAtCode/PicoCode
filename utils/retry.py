@@ -50,17 +50,14 @@ def retry_on_exception(
                 except exceptions as e:
                     last_exception = e
                     
-                    # Check if this is the last attempt
                     if attempt == max_retries - 1:
                         raise
                     
-                    # Calculate delay
                     if exponential_backoff:
                         delay = base_delay * (2 ** attempt)
                     else:
                         delay = base_delay
                     
-                    # Log retry attempt if enabled
                     if log_retries:
                         logger.warning(
                             f"Retry {attempt + 1}/{max_retries} for {func.__name__} "
@@ -69,7 +66,6 @@ def retry_on_exception(
                     
                     time.sleep(delay)
             
-            # This should never be reached, but included for completeness
             if last_exception:
                 raise last_exception
                 
@@ -116,16 +112,13 @@ def retry_on_db_locked(
                     return func(*args, **kwargs)
                 except sqlite3.OperationalError as e:
                     if not is_db_locked(e):
-                        # Not a locked error, re-raise immediately
                         raise
                     
                     last_exception = e
                     
-                    # Check if this is the last attempt
                     if attempt == max_retries - 1:
                         raise
                     
-                    # Exponential backoff
                     delay = base_delay * (2 ** attempt)
                     
                     logger.warning(
@@ -135,7 +128,6 @@ def retry_on_db_locked(
                     
                     time.sleep(delay)
             
-            # This should never be reached, but included for completeness
             if last_exception:
                 raise last_exception
                 

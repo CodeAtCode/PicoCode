@@ -41,7 +41,6 @@ class FileWatcher:
     automatic re-indexing when changes are detected.
     """
     
-    # Class constants for configuration limits
     MIN_DEBOUNCE_SECONDS = 1
     MIN_CHECK_INTERVAL = 5
     
@@ -65,25 +64,20 @@ class FileWatcher:
         self.debounce_seconds = max(self.MIN_DEBOUNCE_SECONDS, debounce_seconds)
         self.check_interval = max(self.MIN_CHECK_INTERVAL, check_interval)
         
-        # Set up logger
         if logger:
             self.logger = logger
         else:
             self.logger = logging.getLogger(__name__)
         
-        # Watched projects: {project_id: {"path": str, "last_scan": float, "file_hashes": dict}}
         self._watched_projects: Dict[str, Dict] = {}
         self._lock = threading.Lock()
         
-        # Threading control
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._running = False
         
-        # Change callbacks
         self._on_change_callback: Optional[Callable] = None
         
-        # File extensions to monitor
         self._monitored_extensions = {
             '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.go', '.rs', 
             '.c', '.cpp', '.h', '.hpp', '.cs', '.php', '.rb', '.swift',
@@ -91,7 +85,6 @@ class FileWatcher:
             '.json', '.xml', '.html', '.css', '.scss', '.md', '.txt'
         }
         
-        # Directories to ignore
         self._ignored_dirs = {
             '.git', '.svn', '.hg', 'node_modules', '__pycache__', '.venv',
             'venv', 'env', 'build', 'dist', 'target', '.idea', '.vscode',
@@ -218,7 +211,6 @@ class FileWatcher:
             except Exception as e:
                 self.logger.exception(f"Error during watch loop: {e}")
             
-            # Wait for the interval or until stop is signaled
             self._stop_event.wait(timeout=self.check_interval)
     
     def _check_all_projects(self) -> None:
@@ -246,19 +238,15 @@ class FileWatcher:
             self.logger.warning(f"Project path no longer exists: {project_path}")
             return
         
-        # Scan current state
         current_hashes = self._scan_directory(project_path)
         old_hashes = project_info["file_hashes"]
         
-        # Detect changes
         changed_files = []
         
-        # New or modified files
         for filepath, filehash in current_hashes.items():
             if filepath not in old_hashes or old_hashes[filepath] != filehash:
                 changed_files.append(filepath)
         
-        # Deleted files
         for filepath in old_hashes:
             if filepath not in current_hashes:
                 changed_files.append(filepath)
@@ -268,16 +256,13 @@ class FileWatcher:
                 f"Detected {len(changed_files)} changed file(s) in project {project_id}"
             )
             
-            # Update stored hashes
             with self._lock:
                 if project_id in self._watched_projects:
                     self._watched_projects[project_id]["file_hashes"] = current_hashes
                     self._watched_projects[project_id]["last_scan"] = time.time()
                     
-                    # Add to pending changes
                     self._watched_projects[project_id]["pending_changes"].update(changed_files)
             
-            # Call callback if set
             if self._on_change_callback:
                 try:
                     self._on_change_callback(project_id, changed_files)
@@ -299,7 +284,6 @@ class FileWatcher:
         file_hashes = {}
         
         try:
-            # Use a stack for iterative directory traversal with os.scandir for better performance
             stack = [directory]
             while stack:
                 current_dir = stack.pop()

@@ -43,7 +43,6 @@ class ProjectService:
             ValueError: If path is invalid
             RuntimeError: If creation fails
         """
-        # Validate path
         if not project_path:
             raise ValueError("Project path cannot be empty")
         
@@ -55,7 +54,6 @@ class ProjectService:
         if not os.path.isdir(abs_path):
             raise ValueError(f"Project path is not a directory: {abs_path}")
         
-        # Create project
         try:
             project = db_create_project(abs_path, name)
             logger.info(f"Created project {project['id']} at {abs_path}")

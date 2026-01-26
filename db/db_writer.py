@@ -13,7 +13,6 @@ from .db_task import _DBTask
 
 _LOG = get_logger(__name__)
 
-# registry of DBWriter instances keyed by database path
 _WRITERS = {}
 _WRITERS_LOCK = threading.Lock()
 
@@ -25,7 +24,6 @@ class DBWriter:
         self._stop = threading.Event()
         self._workers: List[threading.Thread] = []
         self._timeout_seconds = timeout_seconds
-        # Determine number of worker threads (default 1, can be increased for higher concurrency)
         self._num_workers = max(1, num_workers)
         for i in range(self._num_workers):
             worker = threading.Thread(
@@ -39,11 +37,8 @@ class DBWriter:
 
     def _open_conn(self):
         conn = sqlite3.connect(self.database_path, timeout=self._timeout_seconds, check_same_thread=False)
-        # Reduce contention and allow concurrent readers during writes
         conn.execute("PRAGMA journal_mode=WAL;")
-        # Make busy timeout explicit (milliseconds)
         conn.execute("PRAGMA busy_timeout = 30000;")
-        # Optional: balance durability and performance
         conn.execute("PRAGMA synchronous = NORMAL;")
         _LOG.debug(f"Database connection opened for: {self.database_path}")
         return conn
@@ -59,14 +54,12 @@ class DBWriter:
                 except queue.Empty:
                     continue
                 if task is None:
-                    # sentinel to stop
                     break
                 try:
                     cur.execute(task.sql, task.params)
                     conn.commit()
                     task.rowid = cur.lastrowid
                 except Exception as e:
-                    # store exception for the waiting thread to raise or handle
                     task.exception = e
                     try:
                         conn.rollback()
@@ -96,7 +89,6 @@ class DBWriter:
         if not completed:
             raise TimeoutError(f"Timed out waiting for DB write to {self.database_path}")
         if task.exception:
-            # re-raise sqlite3.OperationalError or other exceptions
             raise task.exception
         return task.rowid
 
@@ -112,7 +104,6 @@ class DBWriter:
         """Stop all worker threads. If wait=True, block until all threads join."""
         _LOG.info(f"Stopping DBWriter for database: {self.database_path}")
         self._stop.set()
-        # Enqueue sentinel for each worker to exit
         for _ in range(self._num_workers):
             self._q.put(None)
         if wait:
@@ -127,7 +118,6 @@ def get_writer(database_path):
     Uses multiple worker threads based on configuration to reduce lock contention.
     """
     from utils.config import CFG
-    # Determine number of workers, default 2, capped at CPU count
     cpu = os.cpu_count() or 1
     default_workers = min(4, cpu)  # up to 4 workers
     num_workers = int(CFG.get('db_writer_workers', default_workers))
@@ -153,5 +143,4 @@ def stop_all_writers():
             _LOG.exception("Error stopping DBWriter")
 
 
-# ensure cleanup at exit
 atexit.register(stop_all_writers)

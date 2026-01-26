@@ -34,31 +34,26 @@ def get_db_connection(
     Raises:
         RuntimeError: If vector extension fails to load when enable_vector=True
     """
-    # Create directory if needed
     dirname = os.path.dirname(os.path.abspath(db_path))
     if dirname and not os.path.isdir(dirname):
         os.makedirs(dirname, exist_ok=True)
     
-    # Create connection with consistent settings
     conn = sqlite3.connect(db_path, timeout=timeout, check_same_thread=False)
     
     if row_factory:
         conn.row_factory = sqlite3.Row
     
-    # Enable WAL mode for better concurrency
     if enable_wal:
         try:
             conn.execute("PRAGMA journal_mode = WAL;")
         except Exception as e:
             logger.warning(f"Failed to enable WAL mode: {e}")
     
-    # Set busy timeout (milliseconds)
     try:
         conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)};")
     except Exception as e:
         logger.warning(f"Failed to set busy_timeout: {e}")
     
-    # Load vector extension if requested
     if enable_vector:
         from .vector_operations import load_sqlite_vector_extension
         load_sqlite_vector_extension(conn)

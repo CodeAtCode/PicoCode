@@ -11,62 +11,7 @@
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-  <style>
-    body { padding-top: 1.5rem; padding-bottom: 3rem; background:#f7f9fb; }
-    .chat-window { height: 62vh; overflow:auto; padding:.75rem; background:#ffffff; border:1px solid #e9ecef; border-radius:8px; }
-    .msg { margin-bottom:.75rem; display:flex; gap:.75rem; }
-    .msg.user { justify-content:flex-end; }
-    .msg.assistant { justify-content:flex-start; }
-    .msg .card { max-width:78%; border-radius:10px; box-shadow:none; }
-    .msg.user .card { background:#e9f5ff; border:1px solid #cfeeff; }
-    .msg.assistant .card { background:#f8f9fa; border:1px solid #e9ecef; }
-    .meta { font-size:.80rem; color:#6c757d; }
-    .actions { display:flex; gap:.25rem; align-items:center; }
-    .spinner-small { width:1rem; height:1rem; border:2px solid rgba(0,0,0,0.12); border-top-color:#0d6efd; border-radius:50%; animation:spin 1s linear infinite; }
-    @keyframes spin { to { transform:rotate(360deg); } }
-    .context-list { font-family:monospace; font-size:.85rem; color:#333; }
-    .context-item { margin-bottom: 1rem; padding: 0.75rem; background: #f8f9fa; border-left: 3px solid #0d6efd; border-radius: 4px; }
-    .context-item-header { font-weight: bold; margin-bottom: 0.5rem; color: #0d6efd; }
-    .context-item-content { font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; background: #ffffff; padding: 0.5rem; border-radius: 4px; max-height: 200px; overflow-y: auto; }
-    .markdown-content { line-height: 1.6; }
-    .markdown-content pre { background: #f6f8fa; padding: 1rem; border-radius: 6px; overflow-x: auto; }
-    .markdown-content code { background: #f6f8fa; padding: 0.2em 0.4em; border-radius: 3px; font-size: 85%; }
-    .markdown-content pre code { background: transparent; padding: 0; }
-    .controls-area { display:flex; gap:.5rem; align-items:center; }
-    .empty-state { height:62vh; display:flex; align-items:center; justify-content:center; color:#6c757d; }
-    .btn-sm-icon { padding:.25rem .5rem; font-size:.85rem; }
-    .progress-info { font-size: .95rem; color: #333; display:flex; align-items:center; gap: 0.5rem; }
-    .project-item { cursor: pointer; }
-    .project-item:hover { background-color: #f8f9fa; }
-    .project-item.active { background-color: #e7f3ff; border-left: 3px solid #0d6efd; }
-
-/* ---- NEW: Focus outlines (visible for keyboard users) ---- */
-:focus-visible {
-  outline: 3px solid #0d6efd;      /* Bootstrap primary colour */
-  outline-offset: 2px;
-}
-
-body.dark-mode :focus-visible {
-  outline-color: #66b2ff;
-}
-
-button:focus-visible,
-select:focus-visible,
-textarea:focus-visible,
-input:focus-visible {
-  outline: 3px solid #0d6efd;
-}
-/* ---- END focus outlines ---- */
-
-/* Copy button styling */
-.copy-btn {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  opacity: 0.7;
-}
-pre:hover .copy-btn { opacity: 1; }
-  </style>
+<link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
   <div class="container">
@@ -210,490 +155,59 @@ pre:hover .copy-btn { opacity: 1; }
     </div>
   </div>
 
-  <script>
-    $(document).ready(function() {
-       // ---- Helper: Bootstrap Confirmation Modal ----
-       async function showConfirm(message) {
-         return new Promise(resolve => {
-           $('#confirmModalBody').text(message);
-           const modalEl = document.getElementById('confirmModal');
-           const modal = new bootstrap.Modal(modalEl);
-           modal.show();
+  <!-- Templates for dynamic UI components -->
+  <template id="chat-message-template">
+    <div class="msg">
+      <div class="card">
+        <div class="card-body">
+          <div class="msg-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong class="msg-author"></strong>
+            <button class="btn btn-sm btn-outline-danger delete-message-btn" style="padding: 2px 8px; font-size: 12px;">&times;</button>
+          </div>
+          <div class="msg-content"></div>
+          <div class="context-list-container" style="display:none;">
+            <div class="mt-3"><strong>Files Used:</strong></div>
+            <div class="context-list"></div>
+          </div>
+          <div class="meta mt-2"></div>
+        </div>
+      </div>
+    </div>
+  </template>
 
-           $('#confirmOkBtn').off('click').on('click', () => {
-             modal.hide();
-             resolve(true);
-           });
-           // Resolve false when modal is dismissed without OK
-           modalEl.addEventListener('hidden.bs.modal', () => {
-             resolve(false);
-           }, { once: true });
-         });
-       }
+  <template id="project-item-template">
+    <li class="list-group-item d-flex justify-content-between align-items-start project-item" data-project-id="${id}">
+      <div class="flex-grow-1">
+        <div class="fw-bold text-black">${name}</div>
+        <small class="text-muted">${path}</small><br>
+        <small class="text-muted">
+          Status: <span class="badge bg-${statusClass}" data-status="${status}">${status}</span>
+        </small>
+        <br>
+        <small class="text-muted indexing-info" style="display:none;">
+          Indexed: <span class="file-count">0</span>/<span class="total-files">0</span> files | <span class="embedding-count">0</span> chunks
+          <div class="progress mt-1" style="height:20px;">
+            <div class="progress-bar bg-success" role="progressbar" style="width:0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+          </div>
+        </small>
+      </div>
+      <div class="d-flex gap-1">
+        <button type="button" class="btn btn-sm btn-outline-success continue-index-btn" data-project-id="${id}" title="Continue indexing (incremental)">+</button>
+        <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="${id}" title="Re-index project (full)">⟳</button>
+        <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="${id}" title="Delete project">×</button>
+      </div>
+    </li>
+  </template>
+  <template id="toast-template">
+    <div class="toast align-items-center border-0" role="alert" aria-live="assertive" aria-atomic="true">
+      <div class="d-flex">
+        <div class="toast-body"></div>
+        <button class="btn btn-sm btn-light ms-2 retry-btn" style="display:none;">Retry</button>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>
+  </template>
 
-       // ---- Helper: Toast notifications ----
-       function showToast(message, type = 'info', opts = {}) {
-         const toastId = 'toast-' + Date.now();
-         const $toast = $(`
-           <div id="${toastId}" class="toast align-items-center text-bg-${type} border-0" role="alert" aria-live="assertive" aria-atomic="true">
-             <div class="d-flex">
-               <div class="toast-body">${message}</div>
-               ${opts.showRetry ? '<button class="btn btn-sm btn-light ms-2 retry-btn">Retry</button>' : ''}
-               <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
-             </div>
-           </div>
-         `);
-         $('#toastContainer').append($toast);
-         const toast = new bootstrap.Toast($toast[0], { delay: opts.delay || 5000 });
-         toast.show();
-         if (opts.showRetry && typeof opts.onRetry === 'function') {
-           $toast.find('.retry-btn').on('click', () => {
-             toast.hide();
-             opts.onRetry();
-           });
-         }
-       }
-
-// (Duplicate variable declarations removed)
-        // Define jQuery element references once
-        const $chatWindow = $('#chatWindow');
-        const $userPrompt = $('#userPrompt');
-        const $sendBtn = $('#sendBtn');
-        const $clearBtn = $('#clearBtn');
-        const $loadingIndicator = $('#loadingIndicator');
-        // Configure marked for markdown rendering
-      marked.setOptions({
-        highlight: function(code, lang) {
-          if (lang && hljs.getLanguage(lang)) {
-            try {
-              return hljs.highlight(code, { language: lang }).value;
-            } catch (err) {}
-          }
-          return hljs.highlightAuto(code).value;
-        },
-        breaks: true,
-        gfm: true
-      });
-
-// (Duplicate variable declarations removed)
-      
-      let chatHistory = JSON.parse(localStorage.getItem("picocode_chat_history") || "[]");
-
-      function renderMarkdown(text) {
-        // Parse markdown and sanitize HTML
-        const rawHtml = marked.parse(text);
-        return DOMPurify.sanitize(rawHtml);
-      }
-      
-      // Toggle section visibility using event delegation
-      $(document).on('click', '.toggle-section', function() {
-        const sectionId = $(this).data('section');
-        const $section = $('#' + sectionId);
-        const $toggle = $('#' + sectionId.replace('Section', 'Toggle'));
-        
-        if ($section.css('display') === 'none') {
-          $section.show();
-          $toggle.text('▼');
-        } else {
-          $section.hide();
-          $toggle.text('▶');
-        }
-      });
-      
-      // Delete message using event delegation
-$(document).on('click', '.delete-message-btn', async function() {
-          const idx = $(this).data('index');
-          if (await showConfirm('Delete this message?')) {
-            chatHistory.splice(idx, 1);
-            localStorage.setItem("picocode_chat_history", JSON.stringify(chatHistory));
-            renderChat();
-          }
-        });
-
-      function renderChat() {
-        if (chatHistory.length === 0) {
-          $chatWindow.html('<div class="empty-state">Start a conversation by typing a message below</div>');
-          return;
-        }
-        
-        $chatWindow.empty();
-        chatHistory.forEach((msg, idx) => {
-          const $msgDiv = $('<div>').addClass(`msg ${msg.role}`);
-          
-          let content = `
-            <div class="card">
-              <div class="card-body">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                  <strong>${msg.role === 'user' ? 'You' : 'PicoCode'}</strong>
-                  <button class="btn btn-sm btn-outline-danger delete-message-btn" data-index="${idx}" style="padding: 2px 8px; font-size: 12px;">×</button>
-                </div>
-          `;
-          
-          // Render message text as markdown for assistant, plain text for user
-          if (msg.role === 'assistant') {
-            content += `<div class="markdown-content">${renderMarkdown(msg.text)}</div>`;
-          } else {
-            content += `<div>${escapeHtml(msg.text)}</div>`;
-          }
-          
-          if (msg.context && msg.context.length > 0) {
-            content += '<div class="mt-3"><strong>Files Used:</strong></div>';
-            content += '<div class="context-list">';
-            msg.context.forEach(c => {
-              content += `
-                <div class="context-item">
-                  <div class="context-item-header">
-                    📄 ${escapeHtml(c.path)} 
-                    <span class="badge bg-primary">${c.score.toFixed(4)}</span>
-                  </div>
-                </div>
-              `;
-            });
-            content += '</div>';
-          }
-          
-          content += `
-                <div class="meta mt-2">${msg.timestamp}</div>
-              </div>
-            </div>
-          `;
-          
-          $msgDiv.html(content);
-          $chatWindow.append($msgDiv);
-        });
-        
-        $chatWindow.scrollTop($chatWindow.prop('scrollHeight'));
-        
-        // Apply syntax highlighting to any code blocks
-        $chatWindow.find('pre code').each(function() {
-          hljs.highlightElement(this);
-        });
-      }
-
-      function escapeHtml(text) {
-        return $('<div>').text(text).html();
-      }
-
-      function addMessage(role, text, context = []) {
-        const timestamp = new Date().toLocaleTimeString();
-        chatHistory.push({ role, text, context, timestamp });
-        localStorage.setItem("picocode_chat_history", JSON.stringify(chatHistory));
-        renderChat();
-      }
-
-      async function sendMessage() {
-        const prompt = $userPrompt.val().trim();
-        if (!prompt) return;
-        
-        const project_id = $('#project_id').val();
-        if (!project_id) {
-          showToast('Please select a project or index one first.', 'warning');
-          return;
-        }
-        
-        const use_rag = $('#use_rag').is(':checked');
-        const top_k = parseInt($('#top_k').val()) || 5;
-        
-        addMessage("user", prompt);
-        $userPrompt.val("");
-        
-        $sendBtn.prop('disabled', true);
-        $loadingIndicator.show();
-        
-        try {
-          const response = await fetch("/code", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-              prompt, 
-              use_rag, 
-              project_id,
-              top_k 
-            })
-          });
-          
-          const data = await response.json();
-          
-          if (data.error) {
-            showToast(`Error: ${data.error}`, 'danger', { showRetry: true, onRetry: sendMessage });
-          } else {
-            addMessage("assistant", data.response, data.used_context || []);
-          }
-        } catch (err) {
-          addMessage("assistant", `Error: ${err.message}`);
-        } finally {
-          $sendBtn.prop('disabled', false);
-          $loadingIndicator.hide();
-        }
-      }
-
-      $sendBtn.on('click', sendMessage);
-      $userPrompt.on('keydown', function(e) {
-        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-          e.preventDefault();
-          sendMessage();
-        }
-      });
-
-      $clearBtn.on('click', async function() {
-        if (await showConfirm("Clear chat history?")) {
-          chatHistory = [];
-          localStorage.removeItem("picocode_chat_history");
-          renderChat();
-        }
-      });
-
-      // Handle creating new project
-      $('#createProjectBtn').on('click', async function() {
-        const projectPath = $('#new_project_path').val().trim();
-        const projectName = $('#new_project_name').val().trim();
-        
-        if (!projectPath) {
-          showToast('Please enter a project path', 'warning');
-          return;
-        }
-        
-        try {
-          // First, create the project
-          const createResponse = await fetch('/api/projects', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              path: projectPath,
-              name: projectName || null
-            })
-          });
-          
-          if (!createResponse.ok) {
-            const data = await createResponse.json();
-            showToast(`Failed to create project: ${data.error || 'Unknown error'}`, 'danger');
-            return;
-          }
-          
-          const project = await createResponse.json();
-          const projectId = project.id;
-          
-          // Then, start indexing
-          const indexResponse = await fetch('/api/projects/index', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              project_id: projectId,
-              incremental: true
-            })
-          });
-          
-          if (indexResponse.ok) {
-            showToast(`Project created and indexing started!\nProject ID: ${projectId}`, 'success');
-            // Clear form
-            $('#new_project_path').val("");
-            $('#new_project_name').val("");
-            // Reload page to show new project
-            window.location.reload();
-          } else {
-            const data = await indexResponse.json();
-            showToast(`Project created but indexing failed: ${data.error || 'Unknown error'}`, 'danger');
-            window.location.reload();
-          }
-        } catch (err) {
-          showToast(`Error: ${err.message}`, 'danger');
-        }
-      });
-
-      // Allow Enter key to create project
-      $('#new_project_path').on('keydown', function(e) {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          $('#createProjectBtn').click();
-        }
-      });
-
-      // Highlight selected project
-      $('.project-item').on('click', function() {
-        $('.project-item').removeClass('active');
-        $(this).addClass('active');
-        const pid = $(this).attr('data-project-id');
-        $('#project_id').val(pid);
-      });
-
-      // Select first project by default
-      const $firstProject = $('.project-item').first();
-      if ($firstProject.length) {
-        $firstProject.addClass('active');
-      }
-
-      // Poll for project status updates with detailed stats
-setInterval(async () => {
-          try {
-            const response = await fetch("/projects/status");
-            const projects = await response.json();
-            
-            // Rebuild the project list each poll to reflect new projects
-            const $list = $('#projectsList');
-            $list.empty();
-            if (projects.length === 0) {
-              $list.append('<p class="text-muted small mb-0">No projects yet. Index a project to get started.</p>');
-            } else {
-              projects.forEach(p => {
-                const projectHtml = `
-                  <li class="list-group-item d-flex justify-content-between align-items-start project-item" data-project-id="${p.id}">
-                    <div class="flex-grow-1">
-                      <div class="fw-bold text-black">${p.name || p.path.split('/').pop()}</div>
-                      <small class="text-muted">${p.path}</small><br>
-                      <small class="text-muted">
-                        Status: <span class="badge bg-${p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary'}" data-status="${p.status}">${p.status}</span>
-                      </small>
-                      <br>
-                      <small class="text-muted indexing-info" style="display:none;">
-                        Indexed: <span class="file-count">0</span>/<span class="total-files">0</span> files | <span class="embedding-count">0</span> chunks
-                        <div class="progress mt-1" style="height:20px;">
-                          <div class="progress-bar bg-success" role="progressbar" style="width:0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
-                        </div>
-                      </small>
-                    </div>
-                    <div class="d-flex gap-1">
-                      <button type="button" class="btn btn-sm btn-outline-success continue-index-btn" data-project-id="${p.id}" title="Continue indexing (incremental)">+</button>
-                      <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="${p.id}" title="Re-index project (full)">⟳</button>
-                      <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="${p.id}" title="Delete project">×</button>
-                    </div>
-                  </li>`;
-                $list.append(projectHtml);
-              });
-            }
-            
-            // After rendering, update status badges and stats for each project
-            for (const p of projects) {
-              const $item = $(`[data-project-id="${p.id}"]`);
-              const $badge = $item.find('.badge');
-              if ($badge.length) {
-                $badge.attr('class', `badge bg-${p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary'}`);
-                $badge.text(p.status);
-              }
-              try {
-                const detailResponse = await fetch(`/api/projects/${p.id}`);
-                const details = await detailResponse.json();
-                if (details.indexing_stats) {
-                  const $indexingInfo = $item.find('.indexing-info');
-                  const $fileCount = $item.find('.file-count');
-                  const $totalFiles = $item.find('.total-files');
-                  const $embeddingCount = $item.find('.embedding-count');
-                  const $progressBar = $item.find('.progress-bar');
-                  if ($indexingInfo.length && $fileCount.length && $totalFiles.length && $embeddingCount.length) {
-                    $fileCount.text(details.indexing_stats.file_count || 0);
-                    $totalFiles.text(details.indexing_stats.total_files || '0');
-                    $embeddingCount.text(details.indexing_stats.embedding_count || 0);
-                    const total = parseInt(details.indexing_stats.total_files) || 0;
-                    const done = parseInt(details.indexing_stats.file_count) || 0;
-                    const percent = total ? Math.round((done / total) * 100) : 0;
-                    $progressBar.css('width', percent + '%').attr('aria-valuenow', percent).text(percent + '%');
-                    if (details.indexing_stats.file_count > 0 || details.indexing_stats.total_files > 0) {
-                      $indexingInfo.show();
-                    } else {
-                      $indexingInfo.hide();
-                    }
-                  }
-                }
-              } catch (detailErr) {
-                // ignore
-              }
-            }
-          } catch (err) {
-            console.error("Error polling status:", err);
-          }
-        }, 10000); // Poll every 10 seconds
-
-      // Handle project re-indexing
-      $(document).on('click', '.continue-index-btn', async function(e) {
-        const projectId = $(this).attr('data-project-id');
-        
-        if (!await showConfirm('Continue indexing this project? This will only index new or modified files.')) {
-          return;
-        }
-        
-        try {
-          const response = await fetch('/api/projects/index', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              project_id: projectId,
-              incremental: true 
-            })
-          });
-          
-          if (response.ok) {
-            const data = await response.json();
-            showToast(`Incremental indexing started. Status: ${data.status}`, 'info');
-            // Reload page to show updated status
-            window.location.reload();
-          } else {
-            const data = await response.json();
-            showToast(`Failed to start indexing: ${data.error || 'Unknown error'}`, 'danger');
-          }
-        } catch (err) {
-          showToast(`Error starting indexing: ${err.message}`, 'danger');
-        }
-      });
-      
-      // Handle full re-indexing
-      $(document).on('click', '.reindex-project-btn', async function(e) {
-        const projectId = $(this).attr('data-project-id');
-        
-        if (!await showConfirm('Re-index this project completely? This will re-process all files.')) {
-          return;
-        }
-        
-        try {
-          const response = await fetch('/api/projects/index', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              project_id: projectId,
-              incremental: false 
-            })
-          });
-          
-          if (response.ok) {
-            const data = await response.json();
-            showToast(`Full re-indexing started. Status: ${data.status}`, 'info');
-            // Reload page to show updated status
-            window.location.reload();
-          } else {
-            const data = await response.json();
-            showToast(`Failed to start re-indexing: ${data.error || 'Unknown error'}`, 'danger');
-          }
-        } catch (err) {
-          alert(`Error starting re-indexing: ${err.message}`);
-        }
-      });
-      
-      // Handle project deletion
-      $(document).on('click', '.delete-project-btn', async function(e) {
-        const projectId = $(this).attr('data-project-id');
-        
-        if (!await showConfirm('Delete this project and its database?')) {
-          return;
-        }
-        
-        try {
-          const response = await fetch(`/projects/${projectId}`, {
-            method: 'DELETE'
-          });
-          
-          if (response.ok) {
-            // Reload page to show updated project list
-            window.location.reload();
-          } else {
-            const data = await response.json();
-            alert(`Failed to delete project: ${data.error || 'Unknown error'}`);
-          }
-        } catch (err) {
-          alert(`Error deleting project: ${err.message}`);
-        }
-      });
-
-      // Initial render
-      renderChat();
-    });
-  </script>
+  <script src="/static/js/main.js"></script>
 </body>
 </html>

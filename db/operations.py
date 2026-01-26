@@ -13,7 +13,6 @@ from .connection import get_db_connection
 
 _LOG = get_logger(__name__)
 
-# Prepared statements cache for frequently used queries
 
 
 
@@ -31,8 +30,6 @@ def init_db(database_path: str) -> None:
     try:
         cur = conn.cursor()
         
-        # files table (stores full content, used to reconstruct chunks)
-        # Added last_modified and file_hash for incremental indexing
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS files (
@@ -50,7 +47,6 @@ def init_db(database_path: str) -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_hash ON files(file_hash);")
 
-        # chunks table: metadata for chunked documents; includes embedding BLOB column
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS chunks (
@@ -66,7 +62,6 @@ def init_db(database_path: str) -> None:
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);")
         
-        # project_metadata table for project-level tracking
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS project_metadata (
@@ -108,8 +103,6 @@ def store_file(database_path, path, content, language, last_modified=None, file_
     params = (path, language, snippet, last_modified, file_hash)
 
     writer = get_writer(database_path)
-    # We wait for the background writer to complete the insert and then return the row id.
-    # This preserves the synchronous semantics callers expect.
     return writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
 
 
@@ -143,7 +136,6 @@ def get_project_stats(database_path: str) -> Dict[str, Any]:
     Returns file_count and embedding_count.
     Uses caching with 60s TTL.
     """
-    # Check cache first
     cache_key = f"stats:{database_path}"
     cached = stats_cache.get(cache_key)
     if cached is not None:
@@ -153,11 +145,9 @@ def get_project_stats(database_path: str) -> Dict[str, Any]:
     try:
         cur = conn.cursor()
         
-        # Count files
         cur.execute("SELECT COUNT(*) FROM files")
         file_count = cur.fetchone()[0]
         
-        # Count embeddings
         cur.execute("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
         embedding_count = cur.fetchone()[0]
         
@@ -166,7 +156,6 @@ def get_project_stats(database_path: str) -> Dict[str, Any]:
             "embedding_count": int(embedding_count)
         }
         
-        # Cache the result
         stats_cache.set(cache_key, stats)
         return stats
     finally:
@@ -205,15 +194,11 @@ def clear_project_data(database_path: str) -> None:
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
-        # Delete chunks first due to foreign key
         cur.execute("DELETE FROM chunks")
-        # Delete files
         cur.execute("DELETE FROM files")
-        # Clear vector metadata to allow re-indexing with different embedding dimensions
         cur.execute("DELETE FROM vector_meta WHERE key = 'dimension'")
 
         conn.commit()
-        # Invalidate caches
         stats_cache.invalidate(f"stats:{database_path}")
         file_cache.clear()  # Clear all file cache since we deleted everything
     except Exception as e:
@@ -255,7 +240,6 @@ def needs_reindex(database_path: str, path: str, current_mtime: float, current_h
     if not existing:
         return True
     
-    # Check if modification time or hash changed
     if existing["last_modified"] is None or existing["file_hash"] is None:
         return True
     
@@ -283,7 +267,6 @@ def set_project_metadata(database_path: str, key: str, value: str) -> None:
             (key, value)
         )
         conn.commit()
-        # Invalidate project cache as metadata may affect project queries
         project_cache.clear()
     except Exception as e:
         conn.rollback()
@@ -346,13 +329,10 @@ def delete_file_by_path(database_path: str, path: str) -> None:
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
-        # Get file_id
         row = cur.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
         if row:
             file_id = row["id"]
-            # Delete chunks first
             cur.execute("DELETE FROM chunks WHERE file_id = ?", (file_id,))
-            # Delete file
             cur.execute("DELETE FROM files WHERE id = ?", (file_id,))
 
         conn.commit()
@@ -363,14 +343,9 @@ def delete_file_by_path(database_path: str, path: str) -> None:
         conn.close()
 
 
-# ============================================================================
-# Project Registry Database Operations
-# ============================================================================
 
-# Default projects directory
 PROJECTS_DIR = os.path.expanduser("~/.picocode/projects")
 
-# Retry configuration for database operations
 DB_RETRY_COUNT = 3
 DB_RETRY_DELAY = 0.1  # seconds
 
@@ -425,8 +400,6 @@ def _init_registry_db():
             """
         )
         conn.commit()
-        # Invalidate cache after update (no specific project_id at this point)
-        # Removed erroneous reference to undefined variable.
     except Exception as e:
         conn.rollback()
         raise e
@@ -455,11 +428,9 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
         _LOG.error(f"Failed to initialize registry: {e}")
         raise RuntimeError(f"Database initialization failed: {e}")
     
-    # Validate and normalize path
     if not project_path or not isinstance(project_path, str):
         raise ValueError("Project path must be a non-empty string")
     
-    # Check for path traversal attempts
     if ".." in project_path or project_path.startswith("~"):
         raise ValueError("Path traversal not allowed in project path")
     
@@ -525,7 +496,6 @@ def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, A
             cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
             row = cur.fetchone()
             result = dict(row) if row else None
-            # Cache the newly created project
             if result:
                 project_cache.set(f"project:id:{project_id}", result)
                 project_cache.set(f"project:path:{project_path}", result)
@@ -546,7 +516,6 @@ def get_project(project_path: str) -> Optional[Dict[str, Any]]:
     _init_registry_db()
     project_path = os.path.abspath(project_path)
     
-    # Check cache first
     cache_key = f"project:path:{project_path}"
     cached = project_cache.get(cache_key)
     if cached is not None:
@@ -575,7 +544,6 @@ def get_project_by_id(project_id: str) -> Optional[Dict[str, Any]]:
     """Get project metadata by ID with caching."""
     _init_registry_db()
     
-    # Check cache first
     cache_key = f"project:id:{project_id}"
     cached = project_cache.get(cache_key)
     if cached is not None:
@@ -649,7 +617,6 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
             conn.close()
     
     _update()
-    # Invalidate cache after update
     project_cache.invalidate(f"project:id:{project_id}")
 
 
@@ -677,7 +644,6 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
             conn.close()
     
     _update()
-    # Invalidate cache after update
     project_cache.invalidate(f"project:id:{project_id}")
 
 
@@ -712,7 +678,6 @@ def delete_project(project_id: str):
             conn.close()
     
     _delete()
-    # Invalidate cache after deletion
     project_cache.invalidate(f"project:id:{project_id}")
     if project.get("path"):
         project_cache.invalidate(f"project:path:{project['path']}")

@@ -43,17 +43,14 @@ class LRUCache:
                 self._misses += 1
                 return None
             
-            # Check TTL
             if self.ttl is not None:
                 timestamp = self._timestamps.get(key, 0)
                 if time.time() - timestamp > self.ttl:
-                    # Expired
                     del self._cache[key]
                     del self._timestamps[key]
                     self._misses += 1
                     return None
             
-            # Move to end (most recently used)
             self._cache.move_to_end(key)
             self._hits += 1
             return self._cache[key]
@@ -68,13 +65,10 @@ class LRUCache:
         """
         with self._lock:
             if key in self._cache:
-                # Update existing
                 self._cache.move_to_end(key)
             else:
-                # Add new
                 self._cache[key] = value
                 
-                # Evict oldest if over max_size
                 if len(self._cache) > self.max_size:
                     oldest_key = next(iter(self._cache))
                     del self._cache[oldest_key]
@@ -115,15 +109,10 @@ class LRUCache:
             }
 
 
-# Global caches for different data types
-# Project metadata cache (small, frequently accessed)
 project_cache = LRUCache(max_size=50, ttl=300)  # 5 minutes TTL
 
-# Project stats cache (small, changes during indexing)
 stats_cache = LRUCache(max_size=100, ttl=60)  # 1 minute TTL
 
-# Search results cache (larger, query results)
 search_cache = LRUCache(max_size=500, ttl=600)  # 10 minutes TTL
 
-# File content cache (medium size, for recently accessed files)
 file_cache = LRUCache(max_size=200, ttl=300)  # 5 minutes TTL

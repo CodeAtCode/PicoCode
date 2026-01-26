@@ -40,15 +40,12 @@ class RateLimiter:
             now = time.time()
             timestamps = self._storage[key]
             
-            # Remove timestamps outside the window
             timestamps[:] = [ts for ts in timestamps if ts > now - self.window]
             
             if len(timestamps) >= self.calls:
-                # Rate limit exceeded
                 retry_after = int(timestamps[0] + self.window - now) + 1
                 return False, retry_after
             
-            # Allow request and record timestamp
             timestamps.append(now)
             return True, 0
     
@@ -59,8 +56,6 @@ class RateLimiter:
                 del self._storage[key]
 
 
-# Global rate limiters for different endpoint types
-# More permissive for queries, stricter for indexing operations
 query_limiter = RateLimiter(calls=100, window=60)  # 100 queries per minute
 indexing_limiter = RateLimiter(calls=10, window=60)  # 10 indexing operations per minute
 general_limiter = RateLimiter(calls=200, window=60)  # 200 general requests per minute

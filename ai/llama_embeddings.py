@@ -39,7 +39,6 @@ class OpenAICompatibleEmbedding(BaseEmbedding):
         """
         super().__init__(**kwargs)
         
-        # Get config values
         self._client = OpenAI(
             api_key=api_key or CFG.get("api_key"),
             base_url=api_base or CFG.get("api_url")
@@ -67,13 +66,11 @@ class OpenAICompatibleEmbedding(BaseEmbedding):
     def _get_text_embedding(self, text: str) -> List[float]:
         """Get embedding for a text."""
         try:
-            # Clean the text
             text = text.replace("\n", " ").strip()
             if not text:
                 logger.warning("Empty text provided for embedding")
                 return []
             
-            # Call OpenAI API
             response = self._client.embeddings.create(
                 input=[text],
                 model=self._model

@@ -42,22 +42,17 @@ class SearchService:
         Raises:
             ValueError: If project not found or not indexed
         """
-        # Validate project
         project = get_project_by_id(project_id)
         if not project:
             raise ValueError(f"Project not found: {project_id}")
         
         db_path = project["database_path"]
         
-        # Check if indexed
         stats = get_project_stats(db_path)
         if stats.get("file_count", 0) == 0:
             raise ValueError(f"Project not indexed: {project_id}")
         
-        # Note: Caching disabled for now since content makes results large
-        # Future: could cache without content and retrieve content on demand
         
-        # Perform search (always includes content)
         try:
             results = search_semantic(query, db_path, top_k=top_k)
             
@@ -95,8 +90,6 @@ class SearchService:
             search_cache.clear()
             logger.info("Cleared entire search cache")
         else:
-            # For now, just clear entire cache
-            # Could be optimized to only clear specific project
             search_cache.clear()
             logger.info(f"Cleared search cache for project {project_id}")
     

@@ -13,12 +13,10 @@ from utils.retry import retry_on_exception
 
 logger = get_logger(__name__)
 
-# sqlite-vector defaults (sensible fixed defaults)
 SQLITE_VECTOR_PKG = "sqlite_vector.binaries"
 SQLITE_VECTOR_RESOURCE = "vector"
 SQLITE_VECTOR_VERSION_FN = "vector_version"      # SELECT vector_version();
 
-# Retry policy for DB-locked operations (used by insert_chunk_vector_with_retry)
 DB_LOCK_RETRY_COUNT = 6
 DB_LOCK_RETRY_BASE_DELAY = 0.05  # seconds, exponential backoff multiplier
 
@@ -62,12 +60,10 @@ def load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:
         ext_path = importlib.resources.files(SQLITE_VECTOR_PKG) / SQLITE_VECTOR_RESOURCE
         conn.load_extension(str(ext_path))
         logger.debug(f"sqlite-vector extension loaded for connection {id(conn)}")
-        # optional quick check: call vector_version()
         try:
             cur = conn.execute(f"SELECT {SQLITE_VECTOR_VERSION_FN}()")
             _ = cur.fetchone()
         except Exception:
-            # version function may not be present; ignore
             pass
     except Exception as e:
         raise RuntimeError(f"Failed to load sqlite-vector extension: {e}") from e
@@ -136,10 +132,8 @@ def insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path:
         RuntimeError: If vector operations fail or dimension mismatch occurs
     """
     cur = conn.cursor()
-    # Ensure schema/meta present
     ensure_chunks_and_meta(conn)
 
-    # dimension handling: store or verify
     cur.execute("SELECT value FROM vector_meta WHERE key = 'dimension'")
     row = cur.fetchone()
     dim = len(vector)
@@ -160,7 +154,6 @@ def insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path:
 
     q_vec = json.dumps(vector)
 
-    # Use retry decorator for the actual insert operation
     @retry_on_exception(
         exceptions=(sqlite3.OperationalError,),
         max_retries=DB_LOCK_RETRY_COUNT,
@@ -169,7 +162,6 @@ def insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path:
     )
     def _insert_with_retry():
         """Inner function with retry logic."""
-        # Check if it's a database locked error
         try:
             cur.execute("INSERT INTO chunks (file_id, path, chunk_index, embedding) VALUES (?, ?, ?, vector_as_f32(?))",
                        (file_id, path, chunk_index, q_vec))
@@ -178,7 +170,6 @@ def insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path:
             logger.debug(f"Inserted chunk vector for {path} chunk {chunk_index}, rowid={rowid}")
             return rowid
         except sqlite3.OperationalError as e:
-            # Only retry on database locked errors
             if "database is locked" not in str(e).lower():
                 logger.error(f"Failed to insert chunk vector: {e}")
                 raise RuntimeError(f"Failed to INSERT chunk vector (vector_as_f32 call): {e}") from e
@@ -218,17 +209,14 @@ def search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) ->
     with db_connection(database_path, enable_vector=True) as conn:
         ensure_chunks_and_meta(conn)
 
-        # Ensure vector index is initialized before searching
         cur = conn.cursor()
         global _CACHED_DIM
-        # Use cached dimension if available
         if _CACHED_DIM is not None:
             dim = _CACHED_DIM
         else:
             cur.execute("SELECT value FROM vector_meta WHERE key = 'dimension'")
             row = cur.fetchone()
             if not row:
-                # No dimension stored means no vectors have been indexed yet
                 logger.info("No vector dimension found in metadata - no chunks indexed yet")
                 return []
             dim = int(row[0])
@@ -286,7 +274,6 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Option
     
     with db_connection(database_path) as conn:
         cur = conn.cursor()
-        # Get file path from database
         cur.execute("SELECT path FROM files WHERE id = ?", (file_id,))
         row = cur.fetchone()
         if not row:
@@ -298,17 +285,14 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Option
             logger.warning(f"File path is empty for file_id={file_id}")
             return None
         
-        # Get project path from metadata
         project_path = get_project_metadata(database_path, "project_path")
         if not project_path:
             logger.error("Project path not found in metadata, cannot read file from filesystem")
             raise RuntimeError("Project path metadata is missing - ensure the indexing process has stored project metadata properly")
         
-        # Construct full file path and resolve to absolute path, using realpath to resolve symlinks
         full_path = os.path.abspath(os.path.realpath(os.path.join(project_path, file_path)))
         normalized_project_path = os.path.abspath(os.path.realpath(project_path))
         
-        # Security check: ensure the resolved path is within the project directory
         try:
             common = os.path.commonpath([full_path, normalized_project_path])
             if common != normalized_project_path:
@@ -321,7 +305,6 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Option
             logger.error(f"Path traversal attempt detected: {file_path} is on a different drive or incompatible path")
             return None
         
-        # Read file content from filesystem
         try:
             with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
                 content = fh.read()
@@ -332,20 +315,15 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Option
         if not content:
             return None
         
-        # Import chunk size parameters from analyzer module
-        # Import chunk size parameters, but avoid heavy imports that require API keys
         try:
             from ai.analyzer import CHUNK_SIZE, CHUNK_OVERLAP
         except Exception:
-            # Fallback defaults matching analyzer defaults
             CHUNK_SIZE = 800
             CHUNK_OVERLAP = 100
         
-        # Extract the chunk
         if CHUNK_SIZE <= 0:
             return content
         
-        # Validate chunk_index
         if chunk_index < 0:
             logger.warning(f"Invalid chunk_index {chunk_index} for file_id={file_id}")
             return None

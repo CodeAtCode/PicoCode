@@ -1,7 +1,6 @@
 from dotenv import load_dotenv
 import os
 
-# Load .env from project root (if present). This populates os.environ.
 load_dotenv(".env")
 
 def _int_env(name, default):
@@ -17,7 +16,6 @@ def _bool_env(name, default):
         return default
     return v.lower() in ("1", "true", "yes")
 
-# Expose a CFG dictionary for the rest of the app
 CFG = {
     "local_path": os.getenv("LOCAL_PATH"),
     "venv_path": os.getenv("VENV_PATH"),
@@ -26,24 +24,19 @@ CFG = {
     "database_path": os.getenv("DATABASE_PATH", "codebase.db"),
     "max_file_size": int(os.getenv("MAX_FILE_SIZE", "200000")),
 
-    # model names for external APIs (optional)
     "embedding_model": os.getenv("EMBEDDING_MODEL"),
     "coding_model": os.getenv("CODING_MODEL"),
 
-    # chunking parameters configurable via env
     "chunk_size": _int_env("CHUNK_SIZE", 800),
     "chunk_overlap": _int_env("CHUNK_OVERLAP", 100),
 
-    # uvicorn host/port (from .env)
     "uvicorn_host": os.getenv("UVICORN_HOST", "127.0.0.1"),
     "uvicorn_port": int(os.getenv("UVICORN_PORT", "8080")),
 
-    # FileWatcher configuration
     "file_watcher_enabled": _bool_env("FILE_WATCHER_ENABLED", True),
     "file_watcher_interval": _int_env("FILE_WATCHER_INTERVAL", 10),
     "file_watcher_debounce": _int_env("FILE_WATCHER_DEBOUNCE", 5),
     
-    # Debug configuration
     "debug": _bool_env("DEBUG", False),
     "db_writer_workers": _int_env("DB_WRITER_WORKERS", 2),
 }

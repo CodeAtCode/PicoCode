@@ -24,7 +24,6 @@ from utils.file_watcher import FileWatcher
 
 logger = get_logger(__name__)
 
-# Global FileWatcher instance
 _file_watcher = None
 
 
@@ -34,7 +33,6 @@ def cleanup_on_exit():
     
     logger.info("Cleaning up resources...")
     
-    # Stop FileWatcher
     if _file_watcher:
         try:
             _file_watcher.stop(timeout=2.0)
@@ -43,7 +41,6 @@ def cleanup_on_exit():
         except Exception as e:
             logger.error(f"Error stopping FileWatcher: {e}")
     
-    # Stop all database writers
     try:
         stop_all_writers()
         logger.info("Database writers stopped")
@@ -58,7 +55,6 @@ def signal_handler(signum, frame):
     sys.exit(0)
 
 
-# Register cleanup handlers
 atexit.register(cleanup_on_exit)
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
@@ -69,12 +65,10 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global _file_watcher
     
-    # Verify database connection can be established (vector extension not required)
     try:
         from db.connection import get_db_connection
         with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
             tmp_db_path = tmp.name
-        # Create connection without vector extension
         conn = get_db_connection(tmp_db_path)
         conn.close()
         os.unlink(tmp_db_path)
@@ -83,9 +77,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"FATAL: Failed to establish database connection at startup: {e}")
         sys.exit(1)
     
-    # Project registry is auto-initialized when needed via create_project
     
-    # Auto-create default project from configured local_path if it exists
     local_path = CFG.get("local_path")
     if local_path and os.path.exists(local_path):
         try:
@@ -93,7 +85,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Could not create default project: {e}")
     
-    # Start FileWatcher if enabled
     if CFG.get("file_watcher_enabled", True):
         try:
             _file_watcher = FileWatcher(
@@ -103,7 +94,6 @@ async def lifespan(app: FastAPI):
                 check_interval=CFG.get("file_watcher_interval", 10)
             )
             
-            # Add all existing projects to the watcher
             try:
                 projects = db_operations.list_projects()
                 for project in projects:
@@ -122,8 +112,6 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Cleanup is handled by atexit and signal handlers
-    # Just ensure FileWatcher stops gracefully here
     if _file_watcher:
         try:
             _file_watcher.stop()
@@ -148,18 +136,15 @@ app = FastAPI(
     ]
 )
 
-# Mount static files if directory exists
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Include routers
 app.include_router(project_router)
 app.include_router(query_router)
 app.include_router(web_router)
 
 
 if __name__ == "__main__":
-    # Configure uvicorn to hide access logs
     uvicorn.run(
         "main:app", 
         host=CFG.get("uvicorn_host", "127.0.0.1"), 
