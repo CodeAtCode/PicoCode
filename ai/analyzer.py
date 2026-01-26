@@ -20,7 +20,7 @@ from .llama_embeddings import OpenAICompatibleEmbedding
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core import Document
 from utils.logger import get_logger
-from utils import compute_file_hash, norm, cosine
+
 import logging
 
 # reduce noise from httpx used by external libs
@@ -163,7 +163,8 @@ def _process_file_sync(
             return {"stored": False, "embedded": False, "skipped": False}
 
         # Compute hash for change detection
-        file_hash = compute_file_hash(content)
+        import hashlib
+        file_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
         
         # Check if file needs reindexing (incremental mode)
         if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
