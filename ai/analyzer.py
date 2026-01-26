@@ -11,8 +11,9 @@ import threading
 
 from db.operations import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
 # Vector store utilities are now handled via SimpleVectorStore
-from llama_index.core.vector_stores import SimpleVectorStore
+
 from llama_index.core.schema import TextNode
+from llama_index.core.vector_stores import SimpleVectorStore
 
 from .openai import call_coding_api
 from .llama_embeddings import OpenAICompatibleEmbedding
@@ -298,145 +299,91 @@ def analyze_local_path_sync(
     incremental: bool = True,
 ):
     """
-    Synchronous implementation of the analysis pipeline.
-    Submits per-file tasks to a shared ThreadPoolExecutor.
-    Supports incremental indexing to skip unchanged files.
+    Simplified indexing pipeline using LlamaIndex ingestion.
+    Collects Document objects for each source file and builds a VectorStoreIndex.
     """
     from db.operations import set_project_metadata
+    from llama_index.core import VectorStoreIndex, Document
+    from llama_index.core.node_parser import SimpleNodeParser
+    from utils.simple_vector_store import get_vector_store
+    from .llama_embeddings import OpenAICompatibleEmbedding
     
-    semaphore = threading.Semaphore(EMBEDDING_CONCURRENCY)
     start_time = time.time()
     
-    # Store project path in metadata for filesystem access
+    # Store project path metadata for later use
     try:
         set_project_metadata(database_path, "project_path", local_path)
-        logger.info(f"Starting indexing for project at: {local_path}")
-        # Check if all files are already indexed to possibly skip full re-index
-        existing_total = get_project_metadata(database_path, "total_files")
-        if existing_total is not None:
-            try:
-                if int(existing_total) == total_files:
-                    logger.info("All files already indexed; skipping full indexing as no changes detected.")
-                    # No need to process further; return early
-                    return
-            except Exception:
-                # If conversion fails, proceed with normal indexing
-                pass
     except Exception as e:
-        logger.warning(f"Failed to store project path in metadata: {e}")
+        logger.warning(f"Failed to store project path metadata: {e}")
     
-    try:
-        file_count = 0
-        emb_count = 0
-        skipped_count = 0
-        file_paths: List[Dict[str, str]] = []
-
-        # Collect files to process
-        logger.info("Collecting files to index...")
-        for root, dirs, files in os.walk(local_path):
-            for fname in files:
-                full = os.path.join(root, fname)
-                rel = os.path.relpath(full, local_path)
-                try:
-                    size = os.path.getsize(full)
-                    if size > max_file_size:
-                        continue
-                except Exception:
+    # Discover files
+    logger.info("Collecting files to index...")
+    file_paths: List[Dict[str, str]] = []
+    for root, _, files in os.walk(local_path):
+        for fname in files:
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, local_path)
+            try:
+                if os.path.getsize(full) > max_file_size:
                     continue
-                file_paths.append({"full": full, "rel": rel})
-        
-        total_files = len(file_paths)
-        logger.info(f"Found {total_files} files to process")
-        
-        # Thread-safe counters: [submitted_count, completed_count, lock]
-        counters = [0, 0, threading.Lock()]
-
-        # Process files in chunks to avoid too many futures at once.
-        CHUNK_SUBMIT = 256
-        for chunk_start in range(0, len(file_paths), CHUNK_SUBMIT):
-            chunk = file_paths[chunk_start : chunk_start + CHUNK_SUBMIT]
-            futures = []
-            for f in chunk:
-                # Increment counter before starting file processing
-                with counters[2]:
-                    counters[0] += 1
-                    file_num = counters[0]
-                
-                fut = _FILE_EXECUTOR.submit(
-                    _process_file_sync,
-                    semaphore,
-                    database_path,
-                    f["full"],
-                    f["rel"],
-                    cfg,
-                    incremental,
-                    file_num,
-                    total_files,
-                )
-                futures.append(fut)
-
-            for fut in concurrent.futures.as_completed(futures):
-                try:
-                    r = fut.result(timeout=FILE_PROCESSING_TIMEOUT)
-
-                    # Increment completed counter and check for periodic logging
-                    with counters[2]:
-                        counters[1] += 1
-                    
-                    if isinstance(r, dict):
-                        if r.get("stored"):
-                            file_count += 1
-                        if r.get("embedded"):
-                            emb_count += 1
-                        if r.get("skipped"):
-                            skipped_count += 1
-                except concurrent.futures.TimeoutError:
-                    logger.error(f"File processing timeout ({FILE_PROCESSING_TIMEOUT}s exceeded)")
-                    with counters[2]:
-                        counters[1] += 1
-                except Exception:
-                    logger.exception("A per-file task failed")
-
-        # Store indexing metadata
-        end_time = time.time()
-        duration = end_time - start_time
-        
-        # Log summary
-        logger.info(f"Indexing completed: {file_count} files processed, {emb_count} embeddings created, {skipped_count} files skipped in {duration:.2f}s")
-        
+            except Exception:
+                continue
+            file_paths.append({"full": full, "rel": rel})
+    total_files = len(file_paths)
+    logger.info(f"Found {total_files} files to index")
+    
+    # Build Document list
+    documents: List[Document] = []
+    for f in file_paths:
         try:
-            # Use batch update for efficiency - single database transaction
-            # Store total_files for performance (avoid re-scanning directory on every request)
-            set_project_metadata_batch(database_path, {
-                "last_indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "last_index_duration": str(duration),
-                "files_indexed": str(file_count),
-                "files_skipped": str(skipped_count),
-                "total_files": str(total_files)  # Store total files found during indexing
-            })
+            with open(f["full"], "r", encoding="utf-8", errors="ignore") as fh:
+                content = fh.read()
+            if not content:
+                continue
+            lang = detect_language(f["rel"])
+            doc = Document(text=content, extra_info={"path": f["rel"], "lang": lang})
+            documents.append(doc)
         except Exception:
-            logger.exception("Failed to store indexing metadata")
-
-        # store uv_detected.json metadata if possible
-        uv_info = None
-        try:
-            uv_info = None if local_path is None else local_path
-        except Exception:
-            uv_info = None
-
-        try:
-            # Metadata storage is non-critical, ignore return value
-            _ = store_file(
-                database_path,
-                "uv_detected.json",
-                json.dumps(uv_info, indent=2),
-                "meta",
-            )
-        except Exception:
-            pass
-
+            logger.exception("Failed to read %s", f["full"])
+    
+    # Build index with SimpleVectorStore and OpenAI embeddings
+    vector_store = SimpleVectorStore()
+    embed_model = OpenAICompatibleEmbedding()
+    parser = SimpleNodeParser(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+    index = VectorStoreIndex.from_documents(
+        documents,
+        vector_store=vector_store,
+        embed_model=embed_model,
+        node_parser=parser,
+    )
+    
+    # Store metadata about indexing
+    duration = time.time() - start_time
+    logger.info(f"Indexing completed: {len(documents)} documents indexed in {duration:.2f}s")
+    try:
+        from db.operations import set_project_metadata_batch
+        set_project_metadata_batch(database_path, {
+            "last_indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "last_index_duration": str(duration),
+            "files_indexed": str(len(documents)),
+            "total_files": str(total_files),
+        })
     except Exception:
-        logger.exception("Analysis failed for %s", local_path)
+        logger.exception("Failed to store indexing metadata")
+    
+    # Store uv_detected.json for reference (non‑critical)
+    try:
+        store_file(
+            database_path,
+            "uv_detected.json",
+            json.dumps(local_path, indent=2),
+            "meta",
+        )
+    except Exception:
+        pass
+    
+    # Return the index for potential further use (optional)
+    return index
 
 
 def analyze_local_path_background(local_path: str, database_path: str, venv_path: Optional[str] = None, max_file_size: int = 200000, cfg: Optional[dict] = None):
