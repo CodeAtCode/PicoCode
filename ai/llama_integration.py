@@ -5,7 +5,7 @@ Provides RAG functionality using llama-index with sqlite-vector backend.
 from typing import List
 from llama_index.core import Document
 # Use SimpleVectorStore for vector operations
-from utils.simple_vector_store import get_vector_store
+
 from llama_index.core.vector_stores.types import VectorStoreQuery
 from llama_index.core.schema import TextNode
 
@@ -13,7 +13,7 @@ from llama_index.core.schema import TextNode
 
 from .llama_embeddings import OpenAICompatibleEmbedding
 # Use LlamaIndex native SQLiteVectorStore
-# SQLiteVectorStore not available; using custom search_vectors
+
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

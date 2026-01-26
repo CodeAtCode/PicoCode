@@ -11,7 +11,7 @@ import threading
 
 from db.operations import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
 # Vector store utilities are now handled via SimpleVectorStore
-from utils.simple_vector_store import get_vector_store
+from llama_index.core.vector_stores import SimpleVectorStore
 from llama_index.core.schema import TextNode
 
 from .openai import call_coding_api
@@ -190,7 +190,7 @@ def _process_file_sync(
             chunks = [content]
 
         # Ensure SimpleVectorStore is initialized (lazy)
-        _ = get_vector_store(database_path)
+        _ = SimpleVectorStore()
 
         embedded_any = False
 
@@ -264,7 +264,7 @@ def _process_file_sync(
                 if emb:
                     try:
                         # Add node with embedding to SimpleVectorStore
-                        vector_store = get_vector_store(database_path)
+                        vector_store = SimpleVectorStore()
                         node = TextNode(
                             text=chunk_doc.text,
                             embedding=emb,

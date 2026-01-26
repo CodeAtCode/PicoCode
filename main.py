@@ -69,33 +69,18 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global _file_watcher
     
+    # Verify database connection can be established (vector extension not required)
     try:
-        from db.vector_operations import connect_db, load_sqlite_vector_extension
-        
-        # Create a temporary database to test the extension
+        from db.connection import get_db_connection
         with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
             tmp_db_path = tmp.name
-        
-        try:
-            conn = connect_db(tmp_db_path)
-            try:
-                load_sqlite_vector_extension(conn)
-                logger.info("✓ sqlite-vector extension loaded successfully")
-            finally:
-                conn.close()
-        finally:
-            # Clean up temporary database
-            try:
-                os.unlink(tmp_db_path)
-            except Exception:
-                pass
-
-        if CFG.get("debug"):
-            logger.info("✓ debug enabled")
-
+        # Create connection without vector extension
+        conn = get_db_connection(tmp_db_path)
+        conn.close()
+        os.unlink(tmp_db_path)
+        logger.info("✓ database connection established successfully")
     except Exception as e:
-        logger.error(f"FATAL: Failed to load sqlite-vector extension at startup: {e}")
-        # Force immediate exit - cannot continue without vector extension
+        logger.error(f"FATAL: Failed to establish database connection at startup: {e}")
         sys.exit(1)
     
     # Project registry is auto-initialized when needed via create_project
