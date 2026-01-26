@@ -332,6 +332,12 @@ def analyze_local_path_sync(
             file_paths.append({"full": full, "rel": rel})
     total_files = len(file_paths)
     logger.info(f"Found {total_files} files to index")
+    # Store total file count early so UI can display it during indexing
+    try:
+        from db.operations import set_project_metadata
+        set_project_metadata(database_path, "total_files", str(total_files))
+    except Exception as e:
+        logger.warning(f"Failed to store early total_files metadata: {e}")
     
     # Build Document list
     documents: List[Document] = []
