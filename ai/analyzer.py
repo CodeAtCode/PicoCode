@@ -183,76 +183,34 @@ def _process_file_sync(
         for batch_num, batch_start in enumerate(range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE), 1):
             batch = chunk_tasks[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
             
-            batch_start_time = time.time()
+            # Collect texts for the batch and request embeddings in a single call
+            batch_texts = [chunk_doc.text for _, chunk_doc in batch]
+            try:
+                batch_embeddings = _embedding_client._get_text_embeddings(batch_texts)
+            except Exception as e:
+                logger.exception("Batch embedding generation failed for %s: %s", rel_path, e)
+                batch_embeddings = [None] * len(batch_texts)
             
-            embedding_futures = []
-            
-            for idx, chunk_doc in batch:
-                embedding_start_time = time.time()
-                future = _EMBEDDING_EXECUTOR.submit(_get_embedding_with_semaphore, semaphore, chunk_doc.text, rel_path, idx, embedding_model)
-                embedding_futures.append((idx, chunk_doc, future, embedding_start_time))
-
             saved_count = 0
             failed_count = 0
-            for idx, chunk_doc, future, embedding_start_time in embedding_futures:
-                try:
-                    emb = future.result(timeout=EMBEDDING_TIMEOUT)  # Add timeout to prevent hanging indefinitely
-                except concurrent.futures.TimeoutError:
-                    elapsed = time.time() - embedding_start_time
-                    
-                    future_exception = None
-                    try:
-                        future_exception = future.exception(timeout=0.1)
-                    except concurrent.futures.TimeoutError:
-                        future_exception = None  # Still running
-                    except Exception as e:
-                        future_exception = e
-                    
-                    diagnostic_info = [
-                        f"Future timeout ({EMBEDDING_TIMEOUT}s) for {rel_path} chunk {idx}:",
-                        f"  - Elapsed time: {elapsed:.2f}s",
-                        f"  - Future state: {future._state if hasattr(future, '_state') else 'unknown'}",
-                    ]
-                    
-                    if future_exception:
-                        diagnostic_info.append(f"  - Future exception: {type(future_exception).__name__}: {future_exception}")
-                    else:
-                        diagnostic_info.append(f"  - Future exception: None (still running or completed)")
-                    
-                    if future.running():
-                        diagnostic_info.append(f"  - Future.running(): True - worker thread is still executing")
-                    elif future.done():
-                        diagnostic_info.append(f"  - Future.done(): True - worker thread completed but future.result() timed out retrieving result")
-                    else:
-                        diagnostic_info.append(f"  - Future status: Pending/Unknown")
-                    
-                    emb = None
-                    failed_count += 1
-                except Exception as e:
-                    logger.exception("Embedding retrieval failed for %s chunk %d: %s", rel_path, idx, e)
-                    emb = None
-                    failed_count += 1
-
+            for (idx, chunk_doc), emb in zip(batch, batch_embeddings):
                 if emb:
+                    # Insert embedding into SQLite-vector database
+                    from db.connection import db_connection
+                    from db.vector_operations import insert_chunk_vector_with_retry
                     try:
-                        vector_store = SimpleVectorStore()
-                        node = TextNode(
-                            text=chunk_doc.text,
-                            embedding=emb,
-                            metadata={
-                                "file_id": fid,
-                                "path": rel_path,
-                                "chunk_index": idx,
-                            },
-                        )
-                        vector_store.add([node])
+                        with db_connection(database_path, enable_vector=True) as conn:
+                            insert_chunk_vector_with_retry(conn, fid, rel_path, idx, emb)
                         saved_count += 1
                         embedded_any = True
+                        print(f"[Embedding] Saved chunk {idx} for file {rel_path}")
                     except Exception as e:
                         failed_count += 1
-                        logger.error(f"Failed to add node to vector store for {rel_path} chunk {idx}: {e}")
+                        logger.error(f"Failed to insert embedding into DB for {rel_path} chunk {idx}: {e}")
                 else:
-                    pass
+                    failed_count += 1
+                    logger.error(f"Embedding missing for {rel_path} chunk {idx}")
+
 
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
@@ -305,6 +263,19 @@ def analyze_local_path_sync(
     except Exception as e:
         logger.warning(f"Failed to store early total_files metadata: {e}")
     
+    # Process files to generate and store embeddings
+    semaphore = threading.Semaphore(EMBEDDING_CONCURRENCY)
+    for f in file_paths:
+        _process_file_sync(
+            semaphore,
+            database_path,
+            f["full"],
+            f["rel"],
+            cfg,
+            incremental=True,
+        )
+    
+    # Collect documents for optional vector store index (if needed for other features)
     documents: List[Document] = []
     for f in file_paths:
         try:
