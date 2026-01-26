@@ -21,22 +21,6 @@ DB_LOCK_RETRY_COUNT = 6
 DB_LOCK_RETRY_BASE_DELAY = 0.05  # seconds, exponential backoff multiplier
 
 
-def connect_db(db_path: str, timeout: float = 30.0) -> sqlite3.Connection:
-    """
-    Create a database connection with appropriate timeout and settings.
-    
-    DEPRECATED: Use db.connection.get_db_connection() instead.
-    This function is maintained for backward compatibility.
-    
-    Args:
-        db_path: Path to the SQLite database file
-        timeout: Timeout in seconds for waiting on locks
-        
-    Returns:
-        sqlite3.Connection object configured for vector operations
-    """
-    from .connection import get_db_connection
-    return get_db_connection(db_path, timeout=timeout, enable_vector=False)
 
 
 def load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:

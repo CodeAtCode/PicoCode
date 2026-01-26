@@ -14,10 +14,6 @@ from .connection import get_db_connection
 _LOG = get_logger(__name__)
 
 
-
-
-
-
 def init_db(database_path: str) -> None:
     """
     Initialize database schema. Safe to call multiple times.

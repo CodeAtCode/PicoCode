@@ -203,7 +203,6 @@ def _process_file_sync(
                             insert_chunk_vector_with_retry(conn, fid, rel_path, idx, emb)
                         saved_count += 1
                         embedded_any = True
-                        print(f"[Embedding] Saved chunk {idx} for file {rel_path}")
                     except Exception as e:
                         failed_count += 1
                         logger.error(f"Failed to insert embedding into DB for {rel_path} chunk {idx}: {e}")
@@ -255,8 +254,18 @@ def analyze_local_path_sync(
             except Exception:
                 continue
             file_paths.append({"full": full, "rel": rel})
+    # Prioritize project files over dependencies (.venv, node_modules)
+    project_files = []
+    dep_files = []
+    for entry in file_paths:
+        rel_path = entry["rel"].replace(os.sep, "/")
+        if ".venv/" in rel_path or "node_modules/" in rel_path:
+            dep_files.append(entry)
+        else:
+            project_files.append(entry)
+    file_paths = project_files + dep_files
     total_files = len(file_paths)
-    logger.info(f"Found {total_files} files to index")
+    logger.info(f"Found {total_files} files to index (project files first)")
     try:
         from db.operations import set_project_metadata
         set_project_metadata(database_path, "total_files", str(total_files))
