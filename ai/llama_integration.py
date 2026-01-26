@@ -7,7 +7,8 @@ from llama_index.core import Document
 from llama_index.core.vector_stores.types import VectorStoreQuery
 
 from .llama_embeddings import OpenAICompatibleEmbedding
-from .llama_vector_store import SQLiteVectorStore
+# Use LlamaIndex native SQLiteVectorStore
+from llama_index.vector_stores import SQLiteVectorStore
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

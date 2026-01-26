@@ -19,7 +19,7 @@ from db.vector_operations import (
 )
 from .openai import call_coding_api
 from .llama_embeddings import OpenAICompatibleEmbedding
-from .llama_chunker import chunk_with_llama_index
+from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core import Document
 from utils.logger import get_logger
 from utils import compute_file_hash, norm, cosine
@@ -184,9 +184,11 @@ def _process_file_sync(
         if isinstance(cfg, dict):
             embedding_model = cfg.get("embedding_model")
 
-        # Use llama-index chunking for all content
-        chunks = chunk_with_llama_index(content, language=lang, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-        
+        # Use LlamaIndex SimpleNodeParser for chunking
+        parser = SimpleNodeParser(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+        doc_obj = Document(text=content, extra_info={"path": rel_path, "lang": lang})
+        nodes = parser.get_nodes_from_documents([doc_obj])
+        chunks = [node.text for node in nodes if node.text]
         if not chunks:
             chunks = [content]
 
