@@ -121,6 +121,7 @@
                        <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="{{ p.id }}" title="Re-index project (full)">⟳</button>
                        <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="{{ p.id }}" title="Delete project">×</button>
                        <button type="button" class="btn btn-sm btn-outline-info view-deps-btn" data-project-id="{{ p.id }}" title="View dependencies">📦</button>
+                       <button type="button" class="btn btn-sm btn-outline-secondary view-all-deps-btn" data-project-id="{{ p.id }}" title="View all dependencies (including transitive)">🧩</button>
                      </div>
                   </li>
                 {% endfor %}
@@ -216,7 +217,8 @@
           <button type="button" class="btn btn-sm btn-outline-success continue-index-btn" data-project-id="${id}" title="Continue indexing (incremental)">+</button>
           <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="${id}" title="Re-index project (full)">⟳</button>
           <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="${id}" title="Delete project">×</button>
-          <button type="button" class="btn btn-sm btn-outline-info view-deps-btn" data-project-id="${id}" title="View dependencies">📦</button>
+          <button type="button" class="btn btn-sm btn-outline-info view-deps-btn" data-project-id="${id}" title="View direct dependencies">📦</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary view-all-deps-btn" data-project-id="${id}" title="View all dependencies (including transitive)">🧩</button>
         </div>
     </li>
   </template>

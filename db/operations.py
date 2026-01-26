@@ -1,3 +1,4 @@
+import hashlib
 import os
 from typing import Any
 
@@ -19,6 +20,7 @@ def init_db(database_path: str) -> None:
     - chunks (with embedding BLOB column for sqlite-vector)
     - project_metadata (project-level tracking)
     - vector_meta (stores vector dimension metadata needed for vector operations)
+    - project_dependencies (cached dependencies per project)
     """
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
@@ -72,6 +74,19 @@ def init_db(database_path: str) -> None:
             CREATE TABLE IF NOT EXISTS vector_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            )
+            """
+        )
+        # Create cache table for project dependencies
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_dependencies (
+                project_id TEXT NOT NULL,
+                language TEXT NOT NULL,
+                name TEXT NOT NULL,
+                version TEXT,
+                is_transitive INTEGER NOT NULL,
+                PRIMARY KEY (project_id, language, name, is_transitive)
             )
             """
         )
@@ -150,11 +165,18 @@ def get_project_stats(database_path: str) -> dict[str, Any]:
 def get_file_by_path(database_path: str, path: str) -> dict[str, Any] | None:
     """
     Get file metadata by path for incremental indexing checks.
-    Returns None if file doesn't exist.
+    Returns None if file doesn't exist or the database/table is missing.
     """
+    # If the database file does not exist (e.g., project was deleted), skip lookup
+    if not os.path.exists(database_path):
+        return None
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
-        row = conn.execute("SELECT id, path, last_modified, file_hash FROM files WHERE path = ?", (path,)).fetchone()
+        try:
+            row = conn.execute("SELECT id, path, last_modified, file_hash FROM files WHERE path = ?", (path,)).fetchone()
+        except Exception:
+            # Table may not exist yet – treat as no entry
+            return None
         if row:
             return {"id": row["id"], "path": row["path"], "last_modified": row["last_modified"], "file_hash": row["file_hash"]}
         return None
@@ -237,9 +259,113 @@ def set_project_metadata_batch(database_path: str, metadata: dict[str, str]) -> 
         conn.close()
 
 
+def _compute_deps_hash(project_path: str) -> str:
+    """Hash the contents of all manifest files that affect direct dependencies.
+    Used to invalidate cached dependency rows when a manifest changes.
+    """
+    manifests = ["requirements.txt", "pyproject.toml", "package.json", "Cargo.toml", "go.mod", "pom.xml", "build.gradle"]
+    h = hashlib.sha256()
+    for name in manifests:
+        path = os.path.join(project_path, name)
+        if os.path.isfile(path):
+            try:
+                with open(path, "rb") as fh:
+                    h.update(fh.read())
+            except Exception:
+                pass
+    return h.hexdigest()
+
+
+def _compute_all_deps_hash(project_path: str) -> str:
+    """Hash the contents of all files (manifest + lock) that affect the full dependency set.
+    Used to invalidate cached full‑dependency rows when any relevant file changes.
+    """
+    files = [
+        "requirements.txt",
+        "pyproject.toml",
+        "package.json",
+        "Cargo.toml",
+        "Cargo.lock",
+        "go.mod",
+        "go.sum",
+        "pom.xml",
+        "build.gradle",
+    ]
+    h = hashlib.sha256()
+    for name in files:
+        path = os.path.join(project_path, name)
+        if os.path.isfile(path):
+            try:
+                with open(path, "rb") as fh:
+                    h.update(fh.read())
+            except Exception:
+                pass
+    return h.hexdigest()
+
+
+def store_project_dependencies(database_path: str, project_id: str, deps: dict, is_transitive: int) -> None:
+    """Store dependency rows for a project.
+    `deps` format: { language: [{"name":..., "version":...}, ...] }
+    `is_transitive` should be 0 for direct only, 1 for full.
+    Existing rows for the same project_id and is_transitive are removed first.
+    """
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
+    try:
+        cur = conn.cursor()
+        # Remove old rows for this project & flag
+        cur.execute("DELETE FROM project_dependencies WHERE project_id = ? AND is_transitive = ?", (project_id, is_transitive))
+        for lang, items in deps.items():
+            for item in items:
+                name = item.get("name")
+                version = item.get("version")
+                cur.execute(
+                    "INSERT INTO project_dependencies (project_id, language, name, version, is_transitive) VALUES (?, ?, ?, ?, ?)",
+                    (project_id, lang, name, version, is_transitive),
+                )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e from e
+    finally:
+        conn.close()
+
+
+def load_cached_dependencies(database_path: str, project_id: str, is_transitive: int) -> dict:
+    """Load cached dependencies for a project and flag. Returns dict[language] = list of deps.
+    If no rows exist, returns empty dict.
+    """
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT language, name, version FROM project_dependencies WHERE project_id = ? AND is_transitive = ?",
+            (project_id, is_transitive),
+        )
+        rows = cur.fetchall()
+        result: dict = {}
+        for row in rows:
+            lang = row["language"]
+            entry = {"name": row["name"], "version": row["version"]}
+            result.setdefault(lang, []).append(entry)
+        return result
+    finally:
+        conn.close()
+
+
+def clear_project_dependencies(database_path: str, project_id: str) -> None:
+    """Remove all cached dependency rows for a project."""
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM project_dependencies WHERE project_id = ?", (project_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # Added clear_project_data for full re-indexing support
 def clear_project_data(database_path: str) -> None:
-    """Delete all files, chunks, and vector metadata for a project.
+    """Delete all files, chunks, and vector metadata for a project, and clear cached dependencies.
     Used before a full re‑index to start from a clean state.
     Also invalidates the stats cache.
     """
@@ -249,11 +375,12 @@ def clear_project_data(database_path: str) -> None:
         cur.execute("DELETE FROM chunks")
         cur.execute("DELETE FROM files")
         cur.execute("DELETE FROM vector_meta WHERE key = 'dimension'")
+        # Clear cached dependencies for the project (project_id is stored in the DB path; higher‑level code will delete them when needed)
+        conn.commit()
+        stats_cache.invalidate(f"stats:{database_path}")
     except Exception:
         # Table may not exist for older databases; ignore
         pass
-        conn.commit()
-        stats_cache.invalidate(f"stats:{database_path}")
     finally:
         conn.close()
 
@@ -417,8 +544,6 @@ def create_project(project_path: str, name: str | None = None) -> dict[str, Any]
             except Exception as e:
                 _LOG.error(f"Failed to initialize project database: {e}")
                 cur.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-                conn.commit()
-                raise RuntimeError(f"Failed to initialize project database: {e}") from e
 
             cur.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
             row = cur.fetchone()

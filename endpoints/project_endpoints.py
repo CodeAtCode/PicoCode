@@ -129,9 +129,16 @@ def api_get_project(project_id: str):
         return JSONResponse({"error": "Failed to retrieve project"}, status_code=500)
 
 
-# New endpoint to retrieve project dependencies
+# New endpoint to retrieve project dependencies (direct only)
+
+
+# New endpoint to index all dependencies (including transitive) for a project
 @router.get("/projects/{project_id}/dependencies", summary="Get project dependencies")
-def api_get_dependencies(project_id: str):
+def api_get_dependencies(project_id: str, request: Request):
+    """Return dependencies.
+    Uses caching: direct dependencies are cached with hash of manifest files.
+    Full dependencies (include_transitive=True) are cached separately with a different hash.
+    """
     """
     Return detected dependencies for a given project.
     The response format is:
@@ -147,7 +154,17 @@ def api_get_dependencies(project_id: str):
         project_path = project.get("path")
         if not project_path or not os.path.isdir(project_path):
             return JSONResponse({"error": "Project path invalid"}, status_code=400)
-        deps = get_project_dependencies(project_path)
+        include_transitive = request.query_params.get("include_transitive", "false").lower() == "true"
+        # Try to load cached dependencies first
+        db_path = project.get("database_path")
+        from db.operations import load_cached_dependencies
+
+        is_transitive_flag = 1 if include_transitive else 0
+        cached = load_cached_dependencies(db_path, project_id, is_transitive_flag)
+        if cached:
+            return JSONResponse(cached)
+        # Fallback: compute on the fly (should be rare)
+        deps = get_project_dependencies(project_path, include_transitive=include_transitive)
         return JSONResponse(deps)
     except Exception as e:
         logger.exception(f"Error retrieving dependencies for project {project_id}: {e}")
@@ -187,6 +204,7 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
     - Scans project directory for code files
     - Generates embeddings for semantic search
     - Uses incremental indexing by default (skips unchanged files)
+    - Verifies dependencies at start and populates the `project_dependencies` table
 
     Rate limit: 10 requests per minute per IP.
 
@@ -204,28 +222,60 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
 
         project_path = project["path"]
         db_path = project["database_path"]
+        project_id = project["id"]
 
         if not os.path.exists(project_path):
             return JSONResponse({"error": "Project path does not exist"}, status_code=400)
 
-        # If full re-index requested, clear existing data first
+        # If full re-index requested, clear existing data and dependency cache first
         if request.incremental is False:
-            from db.operations import clear_project_data, set_project_metadata
+            from db.operations import clear_project_data, clear_project_dependencies, set_project_metadata
 
             clear_project_data(db_path)
+            clear_project_dependencies(db_path, project_id)
             # Reset total_files metadata so UI shows 0 before re-index starts
             set_project_metadata(db_path, "total_files", "0")
 
         update_project_status(request.project_id, "indexing")
+        # Ensure project metadata for dependency counts exists (reset before re-index)
+        set_project_metadata(db_path, "direct_deps_count", "0")
+        set_project_metadata(db_path, "full_deps_count", "0")
 
         venv_path = CFG.get("venv_path")
         incremental = request.incremental if request.incremental is not None else True
 
+        # ---------- Dependency verification & caching ----------
+        from db.operations import store_project_dependencies
+        from services.dependency_service import get_project_dependencies
+
+        # Direct dependencies (always computed)
+        direct_deps = get_project_dependencies(project_path, include_transitive=False)
+        store_project_dependencies(db_path, project_id, direct_deps, is_transitive=0)
+        # Store count of direct dependencies as metadata
+        direct_count = sum(len(v) for v in direct_deps.values())
+        set_project_metadata(db_path, "direct_deps_count", str(direct_count))
+        # If full indexing, also compute transitive dependencies
+        if not incremental:
+            full_deps = get_project_dependencies(project_path, include_transitive=True)
+            store_project_dependencies(db_path, project_id, full_deps, is_transitive=1)
+            full_count = sum(len(v) for v in full_deps.values())
+            set_project_metadata(db_path, "full_deps_count", str(full_count))
+        # ------------------------------------------------------
+
         def index_callback():
             try:
                 from ai.analyzer import analyze_local_path_sync
+                from db.operations import store_project_dependencies
+                from services.dependency_service import get_project_dependencies
 
+                # Perform the code indexing first
                 analyze_local_path_sync(project_path, db_path, venv_path, MAX_FILE_SIZE, CFG, incremental=incremental)
+                # After code indexing, recompute and store direct dependencies (and full if needed)
+                direct_deps = get_project_dependencies(project_path, include_transitive=False)
+                store_project_dependencies(db_path, project_id, direct_deps, is_transitive=0)
+                if not incremental:
+                    full_deps = get_project_dependencies(project_path, include_transitive=True)
+                    store_project_dependencies(db_path, project_id, full_deps, is_transitive=1)
                 update_project_status(request.project_id, "ready", datetime.utcnow().isoformat())
             except Exception as e:
                 logger.exception(f"Indexing failed for project {request.project_id}: {e}")

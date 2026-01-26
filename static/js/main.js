@@ -344,37 +344,86 @@ setInterval(pollProjects, 10000);
     });
 
     // View dependencies button handler (opens modal)
+    // View direct dependencies button handler (opens modal)
     $(document).on('click', '.view-deps-btn', async function(e) {
-      const projectId = $(this).attr('data-project-id');
-      if (!projectId) return;
-      try {
-        const resp = await fetch(`/api/projects/${projectId}/dependencies`);
-        if (!resp.ok) {
-          const err = await resp.json();
-          showToast(`Failed to load dependencies: ${err.error || 'unknown'}`, 'danger');
-          return;
+        const projectId = $(this).attr('data-project-id');
+        if (!projectId) return;
+        try {
+            // Direct dependencies (no transitive) – omit query param or set false
+            const resp = await fetch(`/api/projects/${projectId}/dependencies?include_transitive=false`);
+            if (!resp.ok) {
+                const err = await resp.json();
+                showToast(`Failed to load dependencies: ${err.error || 'unknown'}`, 'danger');
+                return;
+            }
+            const deps = await resp.json();
+            // Count total direct dependencies
+            let totalCount = 0;
+            for (const lang in deps) {
+                if (Array.isArray(deps[lang])) totalCount += deps[lang].length;
+            }
+            // Build HTML content for modal body (including count)
+            let html = `<p><strong>Total direct dependencies indexed:</strong> ${totalCount}</p>`;
+            for (const lang in deps) {
+                if (Array.isArray(deps[lang]) && deps[lang].length) {
+                    html += `<h6 class="mt-2 text-capitalize">${lang}</h6><ul class="list-group list-group-flush">`;
+                    deps[lang].forEach(d => {
+                        const version = d.version ? `@ ${d.version}` : '';
+                        html += `<li class="list-group-item py-1">${d.name} ${version}</li>`;
+                    });
+                    html += '</ul>';
+                }
+            }
+            if (!html) html = '<p class="text-muted">No dependencies found.</p>';
+            $('#dependenciesModalBody').html(html);
+            const modalEl = document.getElementById('dependenciesModal');
+            const modal = new bootstrap.Modal(modalEl);
+            modal.show();
+        } catch (err) {
+            showToast(`Error loading dependencies: ${err.message}`, 'danger');
         }
-        const deps = await resp.json();
-        // Build HTML content for modal body
-        let html = '';
-        for (const lang in deps) {
-          if (Array.isArray(deps[lang]) && deps[lang].length) {
-            html += `<h6 class="mt-2 text-capitalize">${lang}</h6><ul class="list-group list-group-flush">`;
-            deps[lang].forEach(d => {
-              const version = d.version ? `@ ${d.version}` : '';
-              html += `<li class="list-group-item py-1">${d.name} ${version}</li>`;
-            });
-            html += '</ul>';
-          }
+    });
+
+    // View all (including transitive) dependencies button handler (opens modal)
+    $(document).on('click', '.view-all-deps-btn', async function(e) {
+        const projectId = $(this).attr('data-project-id');
+        if (!projectId) return;
+        // Ask for confirmation before performing the potentially heavy full indexing
+        const confirmed = await showConfirm('Do you want to index ALL dependencies (including transitive ones)?');
+        if (!confirmed) return;
+        try {
+            const resp = await fetch(`/api/projects/${projectId}/dependencies?include_transitive=true`);
+            if (!resp.ok) {
+                const err = await resp.json();
+                showToast(`Failed to load dependencies: ${err.error || 'unknown'}`, 'danger');
+                return;
+            }
+            const deps = await resp.json();
+            // Count total dependencies for display
+            let totalCount = 0;
+            for (const lang in deps) {
+                if (Array.isArray(deps[lang])) totalCount += deps[lang].length;
+            }
+            // Build HTML content for modal body (including count)
+            let html = `<p><strong>Total dependencies indexed:</strong> ${totalCount}</p>`;
+            for (const lang in deps) {
+                if (Array.isArray(deps[lang]) && deps[lang].length) {
+                    html += `<h6 class="mt-2 text-capitalize">${lang}</h6><ul class="list-group list-group-flush">`;
+                    deps[lang].forEach(d => {
+                        const version = d.version ? `@ ${d.version}` : '';
+                        html += `<li class="list-group-item py-1">${d.name} ${version}</li>`;
+                    });
+                    html += '</ul>';
+                }
+            }
+            if (!html) html = '<p class="text-muted">No dependencies found.</p>';
+            $('#dependenciesModalBody').html(html);
+            const modalEl = document.getElementById('dependenciesModal');
+            const modal = new bootstrap.Modal(modalEl);
+            modal.show();
+        } catch (err) {
+            showToast(`Error loading dependencies: ${err.message}`, 'danger');
         }
-        if (!html) html = '<p class="text-muted">No dependencies found.</p>';
-        $('#dependenciesModalBody').html(html);
-        const modalEl = document.getElementById('dependenciesModal');
-        const modal = new bootstrap.Modal(modalEl);
-        modal.show();
-      } catch (err) {
-        showToast(`Error loading dependencies: ${err.message}`, 'danger');
-      }
     });
 
 

@@ -212,7 +212,7 @@ def _read_build_gradle(project_path: str) -> list[dict[str, str]]:
     return deps
 
 
-def get_project_dependencies(project_path: str) -> dict[str, Any]:
+def get_project_dependencies(project_path: str, include_transitive: bool = False) -> dict[str, Any]:
     """Return a mapping of language -> list of dependencies detected in the project.
     The returned structure includes keys: python, javascript, rust, go, java.
     """
@@ -230,13 +230,15 @@ def get_project_dependencies(project_path: str) -> dict[str, Any]:
     # Rust
     rust_deps = []
     rust_deps.extend(_read_cargo_toml(project_path))
-    rust_deps.extend(_read_cargo_lock(project_path))
+    if include_transitive:
+        rust_deps.extend(_read_cargo_lock(project_path))
     if rust_deps:
         result["rust"] = rust_deps
     # Go
     go_deps = []
     go_deps.extend(_read_go_mod(project_path))
-    go_deps.extend(_read_go_sum(project_path))
+    if include_transitive:
+        go_deps.extend(_read_go_sum(project_path))
     if go_deps:
         result["go"] = go_deps
     # Java
