@@ -4,8 +4,12 @@ Provides RAG functionality using llama-index with sqlite-vector backend.
 """
 from typing import List
 from llama_index.core import Document
-# VectorStoreQuery not needed with custom search_vectors
-from db.vector_operations import search_vectors, get_chunk_text
+# Use SimpleVectorStore for vector operations
+from utils.simple_vector_store import get_vector_store
+from llama_index.core.vector_stores.types import VectorStoreQuery
+from llama_index.core.schema import TextNode
+
+
 
 from .llama_embeddings import OpenAICompatibleEmbedding
 # Use LlamaIndex native SQLiteVectorStore
