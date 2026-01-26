@@ -4,24 +4,6 @@ File Watcher - Monitor project directories for file changes.
 This module provides a background file watcher that monitors registered projects
 for file system changes (new files, modifications, deletions) and can trigger
 automatic re-indexing when changes are detected.
-
-English Prompt for the File Watcher:
-You are a File System Monitor for PicoCode projects.
-
-Your responsibilities:
-1. Watch all registered project directories for file system changes
-2. Detect new files, modified files, and deleted files
-3. Filter changes to only include relevant code files (exclude build artifacts, dependencies)
-4. Trigger incremental re-indexing when significant changes are detected
-5. Maintain a queue of pending changes to process efficiently
-6. Handle errors gracefully without crashing the watcher
-
-Guidelines:
-- Use efficient file system monitoring (inotify on Linux, FSEvents on macOS, etc.)
-- Debounce rapid changes to avoid excessive indexing
-- Respect .gitignore patterns when monitoring
-- Run in a background thread without blocking the main application
-- Provide status information about monitored projects
 """
 
 import os
