@@ -162,7 +162,7 @@ def api_delete_project(project_id: str):
 def api_index_project(http_request: Request, request: IndexProjectRequest, background_tasks: BackgroundTasks):
     """
     Index or re-index a project in the background.
-    
+
     - **project_id**: Unique project identifier
     - **incremental**: If True (default), only index new/changed files. If False, re-index all files.
     
@@ -174,7 +174,6 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
     Rate limit: 10 requests per minute per IP.
     
     Returns immediately with status "indexing".
-    Poll project status to check completion.
     """
     client_ip = _get_client_ip(http_request)
     allowed, retry_after = indexing_limiter.is_allowed(client_ip)
@@ -195,6 +194,13 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
         
         if not os.path.exists(project_path):
             return JSONResponse({"error": "Project path does not exist"}, status_code=400)
+        
+        # If full re-index requested, clear existing data first
+        if request.incremental is False:
+            from db.operations import clear_project_data, set_project_metadata
+            clear_project_data(db_path)
+            # Reset total_files metadata so UI shows 0 before re-index starts
+            set_project_metadata(db_path, "total_files", "0")
         
         update_project_status(request.project_id, "indexing")
         
@@ -224,3 +230,4 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
     except Exception as e:
         logger.exception(f"Error starting project indexing: {e}")
         return JSONResponse({"error": "Failed to start indexing"}, status_code=500)
+

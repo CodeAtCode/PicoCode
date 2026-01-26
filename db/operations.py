@@ -25,6 +25,7 @@ def init_db(database_path: str) -> None:
     - files (stores full content of indexed files with metadata for incremental indexing)
     - chunks (with embedding BLOB column for sqlite-vector)
     - project_metadata (project-level tracking)
+    - vector_meta (stores vector dimension metadata needed for vector operations)
     """
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
@@ -46,7 +47,7 @@ def init_db(database_path: str) -> None:
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_files_hash ON files(file_hash);")
-
+        
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS chunks (
@@ -72,12 +73,23 @@ def init_db(database_path: str) -> None:
             """
         )
         
+        # Vector metadata table (stores dimension of embeddings)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vector_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+            """
+        )
+        
         conn.commit()
     except Exception as e:
         conn.rollback()
         raise e
     finally:
         conn.close()
+
 
 
 def store_file(database_path, path, content, language, last_modified=None, file_hash=None):
@@ -91,19 +103,26 @@ def store_file(database_path, path, content, language, last_modified=None, file_
     """
     snippet = (content[:512] if content else "")
     sql = """
-        INSERT INTO files (path, language, snippet, last_modified, file_hash, updated_at) 
-        VALUES (?, ?, ?, ?, ?, datetime('now'))
-        ON CONFLICT(path) DO UPDATE SET 
-            language=excluded.language,
-            snippet=excluded.snippet,
-            last_modified=excluded.last_modified,
-            file_hash=excluded.file_hash,
-            updated_at=datetime('now')
+    INSERT INTO files (path, language, snippet, last_modified, file_hash, updated_at) 
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(path) DO UPDATE SET 
+        language=excluded.language,
+        snippet=excluded.snippet,
+        last_modified=excluded.last_modified,
+        file_hash=excluded.file_hash,
+        updated_at=datetime('now')
     """
     params = (path, language, snippet, last_modified, file_hash)
 
     writer = get_writer(database_path)
-    return writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
+    rowid = writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
+    # Invalidate cached project stats so UI sees updated file count immediately
+    try:
+        stats_cache.invalidate(f"stats:{database_path}")
+    except Exception:
+        pass
+    return rowid
+
 
 
 
@@ -217,8 +236,8 @@ def set_project_metadata_batch(database_path: str, metadata: Dict[str, str]) -> 
     More efficient than multiple set_project_metadata calls.
     
     Args:
-        database_path: Path to the database
-        metadata: Dictionary of key-value pairs to set
+    database_path: Path to the database
+    metadata: Dictionary of key-value pairs to set
     """
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
@@ -240,6 +259,41 @@ def set_project_metadata_batch(database_path: str, metadata: Dict[str, str]) -> 
         raise e
     finally:
         conn.close()
+
+# Added clear_project_data for full re-indexing support
+def clear_project_data(database_path: str) -> None:
+    """Delete all files, chunks, and vector metadata for a project.
+    Used before a full re‑index to start from a clean state.
+    Also invalidates the stats cache.
+    """
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM chunks")
+        cur.execute("DELETE FROM files")
+        cur.execute("DELETE FROM vector_meta WHERE key = 'dimension'")
+    except Exception:
+        # Table may not exist for older databases; ignore
+        pass
+        conn.commit()
+        stats_cache.invalidate(f"stats:{database_path}")
+    finally:
+        conn.close()
+
+def get_project_metadata(database_path: str, key: str) -> Optional[str]:
+    """
+    Get a project metadata value by key.
+    """
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
+    try:
+        row = conn.execute(
+            "SELECT value FROM project_metadata WHERE key = ?",
+            (key,)
+        ).fetchone()
+        return row["value"] if row else None
+    finally:
+        conn.close()
+
 
 
 def get_project_metadata(database_path: str, key: str) -> Optional[str]:

@@ -243,56 +243,60 @@ function renderChat() {
    $(document).on('click', '.project-item', function() { $('.project-item').removeClass('active'); $(this).addClass('active'); $('#project_id').val($(this).attr('data-project-id')); });
    const $firstProject = $('.project-item').first(); if ($firstProject.length) $firstProject.addClass('active');
 
-   setInterval(async () => {
-     try {
-       const response = await fetch('/projects/status');
-       const projects = await response.json();
-       const $list = $('#projectsList');
-       $list.empty();
-       if (projects.length === 0) {
-         $list.append('<p class="text-muted small mb-0">No projects yet. Index a project to get started.</p>');
-       } else {
-projects.forEach(p => {
-            const $projTemplate = $('#project-item-template').contents().clone();
-            $projTemplate.attr('data-project-id', p.id);
-            $projTemplate.find('.fw-bold.text-black').text(p.name || p.path.split('/').pop());
-            $projTemplate.find('small.text-muted').first().text(p.path);
-            const statusClass = p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary';
-            $projTemplate.find('.badge').attr('class', `badge bg-${statusClass}`).attr('data-status', p.status).text(p.status);
-            $projTemplate.find('.continue-index-btn').attr('data-project-id', p.id);
-            $projTemplate.find('.reindex-project-btn').attr('data-project-id', p.id);
-            $projTemplate.find('.delete-project-btn').attr('data-project-id', p.id);
-            $list.append($projTemplate);
-          });
-       }
-       for (const p of projects) {
-         const $item = $(`[data-project-id="${p.id}"]`);
-         const $badge = $item.find('.badge');
-         if ($badge.length) { $badge.attr('class', `badge bg-${p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary'}`); $badge.text(p.status); }
-         try {
-           const detailResponse = await fetch(`/api/projects/${p.id}`);
-           const details = await detailResponse.json();
-           if (details.indexing_stats) {
-             const $indexingInfo = $item.find('.indexing-info');
-             const $fileCount = $item.find('.file-count');
-             const $totalFiles = $item.find('.total-files');
-             const $embeddingCount = $item.find('.embedding-count');
-             const $progressBar = $item.find('.progress-bar');
-             if ($indexingInfo.length && $fileCount.length && $totalFiles.length && $embeddingCount.length) {
-               $fileCount.text(details.indexing_stats.file_count || 0);
-               $totalFiles.text(details.indexing_stats.total_files || '0');
-               $embeddingCount.text(details.indexing_stats.embedding_count || 0);
-               const total = parseInt(details.indexing_stats.total_files) || 0;
-               const done = parseInt(details.indexing_stats.file_count) || 0;
-               const percent = total ? Math.round((done / total) * 100) : 0;
-               $progressBar.css('width', percent + '%').attr('aria-valuenow', percent).text(percent + '%');
-               if (details.indexing_stats.file_count > 0 || details.indexing_stats.total_files > 0) $indexingInfo.show(); else $indexingInfo.hide();
-             }
-           }
-         } catch (detailErr) { }
-       }
-     } catch (err) { console.error('Error polling status:', err); }
-   }, 10000);
+async function pollProjects() {
+  try {
+    const response = await fetch('/projects/status');
+    const projects = await response.json();
+    const $list = $('#projectsList');
+    $list.empty();
+    if (projects.length === 0) {
+      $list.append('<p class="text-muted small mb-0">No projects yet. Index a project to get started.</p>');
+    } else {
+      projects.forEach(p => {
+        const $projTemplate = $('#project-item-template').contents().clone();
+        $projTemplate.attr('data-project-id', p.id);
+        $projTemplate.find('.fw-bold.text-black').text(p.name || p.path.split('/').pop());
+        $projTemplate.find('small.text-muted').first().text(p.path);
+        const statusClass = p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary';
+        $projTemplate.find('.badge').attr('class', `badge bg-${statusClass}`).attr('data-status', p.status).text(p.status);
+        $projTemplate.find('.continue-index-btn').attr('data-project-id', p.id);
+        $projTemplate.find('.reindex-project-btn').attr('data-project-id', p.id);
+        $projTemplate.find('.delete-project-btn').attr('data-project-id', p.id);
+        $list.append($projTemplate);
+      });
+    }
+    for (const p of projects) {
+      const $item = $(`[data-project-id="${p.id}"]`);
+      const $badge = $item.find('.badge');
+      if ($badge.length) { $badge.attr('class', `badge bg-${p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary'}`); $badge.text(p.status); }
+      try {
+        const detailResponse = await fetch(`/api/projects/${p.id}`);
+        const details = await detailResponse.json();
+        if (details.indexing_stats) {
+          const $indexingInfo = $item.find('.indexing-info');
+          const $fileCount = $item.find('.file-count');
+          const $totalFiles = $item.find('.total-files');
+          const $embeddingCount = $item.find('.embedding-count');
+          const $progressBar = $item.find('.progress-bar');
+          if ($indexingInfo.length && $fileCount.length && $totalFiles.length && $embeddingCount.length) {
+            $fileCount.text(details.indexing_stats.file_count || 0);
+            $totalFiles.text(details.indexing_stats.total_files || '0');
+            $embeddingCount.text(details.indexing_stats.embedding_count || 0);
+            const total = parseInt(details.indexing_stats.total_files) || 0;
+            const done = parseInt(details.indexing_stats.file_count) || 0;
+            const percent = total ? Math.round((done / total) * 100) : 0;
+            $progressBar.css('width', percent + '%').attr('aria-valuenow', percent).text(percent + '%');
+            if (details.indexing_stats.file_count > 0 || details.indexing_stats.total_files > 0) $indexingInfo.show(); else $indexingInfo.hide();
+          }
+        }
+      } catch (detailErr) { }
+    }
+  } catch (err) { console.error('Error polling status:', err); }
+}
+// Immediately fetch project status on page load
+pollProjects();
+// Then continue polling every 10 seconds
+setInterval(pollProjects, 10000);
 
    $(document).on('click', '.continue-index-btn', async function(e) {
      const projectId = $(this).attr('data-project-id');
