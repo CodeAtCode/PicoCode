@@ -6,7 +6,7 @@ import threading
 
 from utils.config import CFG  # config (keeps chunk_size etc if needed)
 from utils.logger import get_logger
-from utils.cache import project_cache, stats_cache, file_cache
+from utils.cache import project_cache, stats_cache
 from utils.retry import retry_on_db_locked
 from .db_writer import get_writer
 from .connection import get_db_connection
@@ -106,28 +106,6 @@ def store_file(database_path, path, content, language, last_modified=None, file_
     return writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
 
 
-def insert_chunk_row_with_null_embedding(database_path: str, file_id: int, path: str, chunk_index: int) -> int:
-    """
-    Insert a chunk metadata row without populating embedding column.
-    Returns the new chunks.id.
-    """
-    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO chunks (file_id, path, chunk_index) VALUES (?, ?, ?)",
-            (file_id, path, chunk_index),
-        )
-        try:
-            conn.commit()
-            return int(cur.lastrowid)
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            conn.close()
-    finally:
-        conn.close()
 
 
 def get_project_stats(database_path: str) -> Dict[str, Any]:
@@ -162,50 +140,8 @@ def get_project_stats(database_path: str) -> Dict[str, Any]:
         conn.close()
 
 
-def list_files(database_path: str) -> List[Dict[str, Any]]:
-    """
-    List all files in a project database.
-    """
-    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
-    try:
-        rows = conn.execute(
-            "SELECT id, path, snippet, language, created_at FROM files ORDER BY id DESC"
-        ).fetchall()
-        return [
-            {
-                "id": r["id"], 
-                "path": r["path"], 
-                "snippet": r["snippet"],
-                "language": r["language"],
-                "created_at": r["created_at"]
-            } 
-            for r in rows
-        ]
-    finally:
-        conn.close()
 
 
-def clear_project_data(database_path: str) -> None:
-    """
-    Clear all files and chunks from a project database.
-    Used when re-indexing a project.
-    Invalidates caches.
-    """
-    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM chunks")
-        cur.execute("DELETE FROM files")
-        cur.execute("DELETE FROM vector_meta WHERE key = 'dimension'")
-
-        conn.commit()
-        stats_cache.invalidate(f"stats:{database_path}")
-        file_cache.clear()  # Clear all file cache since we deleted everything
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
 
 
 def get_file_by_path(database_path: str, path: str) -> Optional[Dict[str, Any]]:
@@ -321,26 +257,6 @@ def get_project_metadata(database_path: str, key: str) -> Optional[str]:
         conn.close()
 
 
-def delete_file_by_path(database_path: str, path: str) -> None:
-    """
-    Delete a file and its chunks by path.
-    Used for incremental indexing when files are removed.
-    """
-    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
-    try:
-        cur = conn.cursor()
-        row = cur.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
-        if row:
-            file_id = row["id"]
-            cur.execute("DELETE FROM chunks WHERE file_id = ?", (file_id,))
-            cur.execute("DELETE FROM files WHERE id = ?", (file_id,))
-
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
 
 
 

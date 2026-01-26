@@ -17,28 +17,42 @@ $(document).ready(function() {
    }
 
 function showToast(message, type = 'info', opts = {}) {
-      const $template = $('#toast-template').contents().clone();
-      const bgClass = `text-bg-${type}`;
-      $template.addClass(bgClass);
-
-      $template.find('.toast-body').text(message);
-
-      const $retryBtn = $template.find('.retry-btn');
-      if (opts.showRetry && typeof opts.onRetry === 'function') {
-        $retryBtn.show();
-        $retryBtn.off('click').on('click', () => {
-          const toastInstance = bootstrap.Toast.getInstance($template[0]);
-          if (toastInstance) toastInstance.hide();
-          opts.onRetry();
-        });
-      } else {
-        $retryBtn.hide();
-      }
-
-      $('#toastContainer').append($template);
-      const toast = new bootstrap.Toast($template[0], { delay: opts.delay || 5000 });
-      toast.show();
-    }
+       // Use the <template> element to clone a clean toast DOM node
+       const tmpl = document.getElementById('toast-template');
+       if (!tmpl) {
+         console.error('Toast template not found');
+         return;
+       }
+       const clone = tmpl.content.cloneNode(true);
+       const toastEl = clone.querySelector('.toast');
+       if (!toastEl) {
+         console.error('Toast element missing in template');
+         return;
+       }
+       // Apply background class based on type (info, danger, etc.)
+       const bgClass = `text-bg-${type}`;
+       toastEl.classList.add(bgClass);
+       // Set message text
+       const body = toastEl.querySelector('.toast-body');
+       if (body) body.textContent = message;
+       // Retry button handling
+       const retryBtn = toastEl.querySelector('.retry-btn');
+       if (opts.showRetry && typeof opts.onRetry === 'function') {
+         retryBtn.style.display = '';
+         retryBtn.onclick = () => {
+           const toastInstance = bootstrap.Toast.getInstance(toastEl);
+           if (toastInstance) toastInstance.hide();
+           opts.onRetry();
+         };
+       } else if (retryBtn) {
+         retryBtn.style.display = 'none';
+       }
+       // Append to container and show
+       const container = document.getElementById('toastContainer');
+       if (container) container.appendChild(toastEl);
+       const toast = new bootstrap.Toast(toastEl, { delay: opts.delay || 5000 });
+       toast.show();
+     }
 
    const $chatWindow = $('#chatWindow');
    const $userPrompt = $('#userPrompt');
