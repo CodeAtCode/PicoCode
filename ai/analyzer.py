@@ -1,30 +1,29 @@
-import os
-import json
-import time
-import traceback
-import math
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-
 import concurrent.futures
+import json
+import logging
+import os
 import threading
+import time
+from pathlib import Path
+from typing import Any
 
-from db.operations import store_file, needs_reindex, set_project_metadata_batch, get_project_metadata
-
-from llama_index.core.schema import TextNode
+from llama_index.core import Document
+from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.core.vector_stores import SimpleVectorStore
 
-from .openai import call_coding_api
-from .llama_embeddings import OpenAICompatibleEmbedding
-from llama_index.core.node_parser import SimpleNodeParser
-from llama_index.core import Document
+from db.operations import (
+    needs_reindex,
+    store_file,
+)
 from utils.logger import get_logger
 
-import logging
+from .llama_embeddings import OpenAICompatibleEmbedding
+from .openai import call_coding_api
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 EXT_LANG = {
+    # Source code language extensions
     ".py": "python",
     ".js": "javascript",
     ".ts": "typescript",
@@ -37,10 +36,20 @@ EXT_LANG = {
     ".html": "html",
     ".css": "css",
     ".md": "markdown",
+    # Dependency manifest files
+    "requirements.txt": "python-deps",
+    "pyproject.toml": "python-deps",
+    "package.json": "javascript-deps",
+    "Cargo.toml": "rust-deps",
+    "Cargo.lock": "rust-deps",
+    "go.mod": "go-deps",
+    "go.sum": "go-deps",
+    "pom.xml": "java-deps",
+    "build.gradle": "java-deps",
 }
 
-CHUNK_SIZE = 800         # characters per chunk
-CHUNK_OVERLAP = 100      # overlapping characters between chunks
+CHUNK_SIZE = 800  # characters per chunk
+CHUNK_OVERLAP = 100  # overlapping characters between chunks
 
 EMBEDDING_CONCURRENCY = 4
 EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
@@ -48,7 +57,6 @@ PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
 EMBEDDING_TIMEOUT = 15  # Reduced timeout in seconds for each embedding API call (including retries)
 FILE_PROCESSING_TIMEOUT = 120  # Reduced timeout in seconds for processing a single file (2 minutes)
 
-import os
 cpu_count = os.cpu_count() or 1
 _FILE_EXECUTOR_WORKERS = max(2, min(8, cpu_count // 2))
 _EMBEDDING_EXECUTOR_WORKERS = max(2, min(8, cpu_count // 2))
@@ -66,7 +74,7 @@ except Exception as e:
 _thread_state = threading.local()
 
 
-def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, file_path: str = "<unknown>", chunk_index: int = 0, model: Optional[str] = None):
+def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, file_path: str = "<unknown>", chunk_index: int = 0, model: str | None = None):
     """
     Wrapper to acquire semaphore inside executor task to avoid deadlock.
     The semaphore is acquired in the worker thread, not the main thread.
@@ -76,7 +84,7 @@ def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, fil
     _thread_state.file_path = file_path
     _thread_state.chunk_index = chunk_index
     _thread_state.start_time = time.time()
-    
+
     semaphore.acquire()
     try:
         _thread_state.stage = "calling_embed_text"
@@ -98,6 +106,12 @@ def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, fil
 
 
 def detect_language(path: str):
+    """Detect language or dependency type based on file name or extension.
+
+    First checks the base filename against EXT_LANG (allows entries like
+    "requirements.txt" or "package.json"). If not found, falls back to the
+    file extension mapping.
+    """
     if "LICENSE.md" in path:
         return "text"
     if "__editable__" in path:
@@ -106,9 +120,13 @@ def detect_language(path: str):
         return "text"
     if "activate_this.py" in path:
         return "text"
+    # Full filename check (e.g., requirements.txt, pyproject.toml, package.json)
+    filename = os.path.basename(path)
+    if filename in EXT_LANG:
+        return EXT_LANG[filename]
+    # Fallback to extension mapping
     ext = Path(path).suffix.lower()
     return EXT_LANG.get(ext, "text")
-
 
 
 def _process_file_sync(
@@ -116,7 +134,7 @@ def _process_file_sync(
     database_path: str,
     full_path: str,
     rel_path: str,
-    cfg: Optional[Dict[str, Any]],
+    cfg: dict[str, Any] | None,
     incremental: bool = True,
     file_num: int = 0,
     total_files: int = 0,
@@ -125,14 +143,14 @@ def _process_file_sync(
     Synchronous implementation of per-file processing.
     Intended to run on a ThreadPoolExecutor worker thread.
     Returns a dict: {"stored": bool, "embedded": bool, "skipped": bool}
-    
+
     Args:
         file_num: The current file number being processed (1-indexed)
         total_files: Total number of files to process
     """
     try:
         try:
-            with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
+            with open(full_path, encoding="utf-8", errors="ignore") as fh:
                 content = fh.read()
             mtime = os.path.getmtime(full_path)
         except Exception:
@@ -146,8 +164,9 @@ def _process_file_sync(
             return {"stored": False, "embedded": False, "skipped": False}
 
         import hashlib
-        file_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-        
+
+        file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
         if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
             return {"stored": False, "embedded": False, "skipped": True}
 
@@ -158,10 +177,6 @@ def _process_file_sync(
             return {"stored": False, "embedded": False, "skipped": False}
 
         _ = Document(text=content, extra_info={"path": rel_path, "lang": lang})
-
-        embedding_model = None
-        if isinstance(cfg, dict):
-            embedding_model = cfg.get("embedding_model")
 
         parser = SimpleNodeParser(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         doc_obj = Document(text=content, extra_info={"path": rel_path, "lang": lang})
@@ -179,10 +194,9 @@ def _process_file_sync(
             chunk_doc = Document(text=chunk, extra_info={"path": rel_path, "lang": lang, "chunk_index": idx, "chunk_count": len(chunks)})
             chunk_tasks.append((idx, chunk_doc))
 
-        num_batches = math.ceil(len(chunk_tasks) / EMBEDDING_BATCH_SIZE)
-        for batch_num, batch_start in enumerate(range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE), 1):
-            batch = chunk_tasks[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
-            
+        for batch_start in range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE):
+            batch = chunk_tasks[batch_start : batch_start + EMBEDDING_BATCH_SIZE]
+
             # Collect texts for the batch and request embeddings in a single call
             batch_texts = [chunk_doc.text for _, chunk_doc in batch]
             try:
@@ -190,16 +204,17 @@ def _process_file_sync(
             except Exception as e:
                 logger.exception("Batch embedding generation failed for %s: %s", rel_path, e)
                 batch_embeddings = [None] * len(batch_texts)
-            
+
             saved_count = 0
             failed_count = 0
-            for (idx, chunk_doc), emb in zip(batch, batch_embeddings):
+            for (idx, _chunk_doc), emb in zip(batch, batch_embeddings, strict=True):
                 if emb:
                     # Insert embedding into SQLite-vector database
                     from db.connection import db_connection
                     from db.vector_operations import insert_chunk_vector_with_retry
+
                     try:
-                        with db_connection(database_path, enable_vector=True) as conn:
+                        with db_connection(database_path) as conn:
                             insert_chunk_vector_with_retry(conn, fid, rel_path, idx, emb)
                         saved_count += 1
                         embedded_any = True
@@ -210,7 +225,6 @@ def _process_file_sync(
                     failed_count += 1
                     logger.error(f"Embedding missing for {rel_path} chunk {idx}")
 
-
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
         logger.exception("Failed to process file %s", rel_path)
@@ -220,30 +234,31 @@ def _process_file_sync(
 def analyze_local_path_sync(
     local_path: str,
     database_path: str,
-    venv_path: Optional[str] = None,
+    venv_path: str | None = None,
     max_file_size: int = 200000,
-    cfg: Optional[dict] = None,
+    cfg: dict | None = None,
     incremental: bool = True,
 ):
     """
     Simplified indexing pipeline using LlamaIndex ingestion.
     Collects Document objects for each source file and builds a VectorStoreIndex.
     """
-    from db.operations import set_project_metadata
-    from llama_index.core import VectorStoreIndex, Document
+    from llama_index.core import Document, VectorStoreIndex
     from llama_index.core.node_parser import SimpleNodeParser
-    from utils.simple_vector_store import get_vector_store
+
+    from db.operations import set_project_metadata
+
     from .llama_embeddings import OpenAICompatibleEmbedding
-    
+
     start_time = time.time()
-    
+
     try:
         set_project_metadata(database_path, "project_path", local_path)
     except Exception as e:
         logger.warning(f"Failed to store project path metadata: {e}")
-    
+
     logger.info("Collecting files to index...")
-    file_paths: List[Dict[str, str]] = []
+    file_paths: list[dict[str, str]] = []
     for root, _, files in os.walk(local_path):
         for fname in files:
             full = os.path.join(root, fname)
@@ -268,10 +283,11 @@ def analyze_local_path_sync(
     logger.info(f"Found {total_files} files to index (project files first)")
     try:
         from db.operations import set_project_metadata
+
         set_project_metadata(database_path, "total_files", str(total_files))
     except Exception as e:
         logger.warning(f"Failed to store early total_files metadata: {e}")
-    
+
     # Process files to generate and store embeddings
     semaphore = threading.Semaphore(EMBEDDING_CONCURRENCY)
     for f in file_paths:
@@ -283,12 +299,12 @@ def analyze_local_path_sync(
             cfg,
             incremental=True,
         )
-    
+
     # Collect documents for optional vector store index (if needed for other features)
-    documents: List[Document] = []
+    documents: list[Document] = []
     for f in file_paths:
         try:
-            with open(f["full"], "r", encoding="utf-8", errors="ignore") as fh:
+            with open(f["full"], encoding="utf-8", errors="ignore") as fh:
                 content = fh.read()
             if not content:
                 continue
@@ -297,7 +313,7 @@ def analyze_local_path_sync(
             documents.append(doc)
         except Exception:
             logger.exception("Failed to read %s", f["full"])
-    
+
     vector_store = SimpleVectorStore()
     embed_model = OpenAICompatibleEmbedding()
     parser = SimpleNodeParser(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
@@ -307,20 +323,24 @@ def analyze_local_path_sync(
         embed_model=embed_model,
         node_parser=parser,
     )
-    
+
     duration = time.time() - start_time
     logger.info(f"Indexing completed: {len(documents)} documents indexed in {duration:.2f}s")
     try:
         from db.operations import set_project_metadata_batch
-        set_project_metadata_batch(database_path, {
-            "last_indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "last_index_duration": str(duration),
-            "files_indexed": str(len(documents)),
-            "total_files": str(total_files),
-        })
+
+        set_project_metadata_batch(
+            database_path,
+            {
+                "last_indexed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "last_index_duration": str(duration),
+                "files_indexed": str(len(documents)),
+                "total_files": str(total_files),
+            },
+        )
     except Exception:
         logger.exception("Failed to store indexing metadata")
-    
+
     try:
         store_file(
             database_path,
@@ -330,11 +350,11 @@ def analyze_local_path_sync(
         )
     except Exception:
         pass
-    
+
     return index
 
 
-def analyze_local_path_background(local_path: str, database_path: str, venv_path: Optional[str] = None, max_file_size: int = 200000, cfg: Optional[dict] = None):
+def analyze_local_path_background(local_path: str, database_path: str, venv_path: str | None = None, max_file_size: int = 200000, cfg: dict | None = None):
     """
     Wrapper intended to be scheduled by FastAPI BackgroundTasks.
     This function runs the synchronous analyzer in the FastAPI background task.
@@ -347,25 +367,24 @@ def analyze_local_path_background(local_path: str, database_path: str, venv_path
         logger.exception("Background analysis worker failed for %s", local_path)
 
 
-
 def search_semantic(query: str, database_path: str, top_k: int = 5):
     """
     Uses llama-index with sqlite-vector backend to retrieve best-matching chunks.
     Always includes content as it's needed for the coding model context.
-    
+
     Args:
         query: Search query text
         database_path: Path to the SQLite database
         top_k: Number of results to return
-        
+
     Returns:
         List of dicts with file_id, path, chunk_index, score, and content
     """
     try:
         from .llama_integration import llama_index_search
-        
+
         docs = llama_index_search(query, database_path, top_k=top_k)
-        
+
         results = []
         for doc in docs:
             metadata = doc.metadata or {}
@@ -374,13 +393,13 @@ def search_semantic(query: str, database_path: str, top_k: int = 5):
                 "path": metadata.get("path", ""),
                 "chunk_index": metadata.get("chunk_index", 0),
                 "score": metadata.get("score", 0.0),
-                "content": doc.text or ""  # Always include content for LLM context
+                "content": doc.text or "",  # Always include content for LLM context
             }
             results.append(result)
-        
+
         logger.info(f"llama-index search returned {len(results)} results")
         return results
-        
+
     except Exception as e:
         logger.exception(f"Semantic search failed: {e}")
         raise

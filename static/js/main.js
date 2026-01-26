@@ -248,11 +248,16 @@ async function pollProjects() {
     const response = await fetch('/projects/status');
     const projects = await response.json();
     const $list = $('#projectsList');
-    $list.empty();
     if (projects.length === 0) {
+      $list.empty();
       $list.append('<p class="text-muted small mb-0">No projects yet. Index a project to get started.</p>');
-    } else {
-      projects.forEach(p => {
+      return;
+    }
+    // Update or add project items without wiping the whole list
+    projects.forEach(p => {
+      let $item = $(`[data-project-id="${p.id}"]`);
+      if ($item.length === 0) {
+        // create new item from template
         const $projTemplate = $('#project-item-template').contents().clone();
         $projTemplate.attr('data-project-id', p.id);
         $projTemplate.find('.fw-bold.text-black').text(p.name || p.path.split('/').pop());
@@ -262,13 +267,20 @@ async function pollProjects() {
         $projTemplate.find('.continue-index-btn').attr('data-project-id', p.id);
         $projTemplate.find('.reindex-project-btn').attr('data-project-id', p.id);
         $projTemplate.find('.delete-project-btn').attr('data-project-id', p.id);
+        $projTemplate.find('.view-deps-btn').attr('data-project-id', p.id);
         $list.append($projTemplate);
-      });
-    }
+        $item = $(`[data-project-id="${p.id}"]`);
+      }
+      // Update status badge
+      const $badge = $item.find('.badge');
+      if ($badge.length) {
+        const statusClass = p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary';
+        $badge.attr('class', `badge bg-${statusClass}`).attr('data-status', p.status).text(p.status);
+      }
+    });
+    // Update indexing stats for each project
     for (const p of projects) {
       const $item = $(`[data-project-id="${p.id}"]`);
-      const $badge = $item.find('.badge');
-      if ($badge.length) { $badge.attr('class', `badge bg-${p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary'}`); $badge.text(p.status); }
       try {
         const detailResponse = await fetch(`/api/projects/${p.id}`);
         const details = await detailResponse.json();
@@ -293,6 +305,7 @@ async function pollProjects() {
     }
   } catch (err) { console.error('Error polling status:', err); }
 }
+
 // Immediately fetch project status on page load
 pollProjects();
 // Then continue polling every 10 seconds
@@ -307,14 +320,65 @@ setInterval(pollProjects, 10000);
      } catch (err) { showToast(`Error starting indexing: ${err.message}`, 'danger'); }
    });
 
-   $(document).on('click', '.reindex-project-btn', async function(e) {
-     const projectId = $(this).attr('data-project-id');
-     if (!await showConfirm('Re-index this project completely? This will re-process all files.')) return;
-     try {
-       const response = await fetch('/api/projects/index', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: projectId, incremental: false }) });
-       if (response.ok) { const data = await response.json(); showToast(`Full re-indexing started. Status: ${data.status}`, 'info'); window.location.reload(); } else { const data = await response.json(); showToast(`Failed to start re-indexing: ${data.error || 'Unknown error'}`, 'danger'); }
-     } catch (err) { alert(`Error starting re-indexing: ${err.message}`); }
-   });
+    // Re-index project handler
+    $(document).on('click', '.reindex-project-btn', async function(e) {
+      const projectId = $(this).attr('data-project-id');
+      if (!await showConfirm('Re-index this project completely? This will re-process all files.')) return;
+      try {
+        const response = await fetch('/api/projects/index', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: projectId, incremental: false })
+        });
+        if (response.ok) {
+          const data = await response.json();
+          showToast(`Full re-indexing started. Status: ${data.status}`, 'info');
+          window.location.reload();
+        } else {
+          const data = await response.json();
+          showToast(`Failed to start re-indexing: ${data.error || 'danger'}`, 'danger');
+        }
+      } catch (err) {
+        alert(`Error starting re-indexing: ${err.message}`);
+      }
+    });
+
+    // View dependencies button handler (opens modal)
+    $(document).on('click', '.view-deps-btn', async function(e) {
+      const projectId = $(this).attr('data-project-id');
+      if (!projectId) return;
+      try {
+        const resp = await fetch(`/api/projects/${projectId}/dependencies`);
+        if (!resp.ok) {
+          const err = await resp.json();
+          showToast(`Failed to load dependencies: ${err.error || 'unknown'}`, 'danger');
+          return;
+        }
+        const deps = await resp.json();
+        // Build HTML content for modal body
+        let html = '';
+        for (const lang in deps) {
+          if (Array.isArray(deps[lang]) && deps[lang].length) {
+            html += `<h6 class="mt-2 text-capitalize">${lang}</h6><ul class="list-group list-group-flush">`;
+            deps[lang].forEach(d => {
+              const version = d.version ? `@ ${d.version}` : '';
+              html += `<li class="list-group-item py-1">${d.name} ${version}</li>`;
+            });
+            html += '</ul>';
+          }
+        }
+        if (!html) html = '<p class="text-muted">No dependencies found.</p>';
+        $('#dependenciesModalBody').html(html);
+        const modalEl = document.getElementById('dependenciesModal');
+        const modal = new bootstrap.Modal(modalEl);
+        modal.show();
+      } catch (err) {
+        showToast(`Error loading dependencies: ${err.message}`, 'danger');
+      }
+    });
+
+
+
 
    $(document).on('click', '.delete-project-btn', async function(e) {
      const projectId = $(this).attr('data-project-id');

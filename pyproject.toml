@@ -3,7 +3,7 @@ name = "picocode"
 version = "0.2.0"
 description = "Production-ready local RAG backend with per-project storage and PyCharm integration"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 
 dependencies = [
   "fastapi>=0.85",
@@ -28,3 +28,18 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["ai*", "db*", "services*", "endpoints*"]
 exclude = ["templates*"]
+
+[tool.ruff]
+line-length = 180
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "T20"]
+ignore = ["N806", "W291"]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6.2",
+    "pre-commit>=3.0.0"
+]
+

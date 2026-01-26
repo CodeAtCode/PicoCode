@@ -15,22 +15,40 @@
 </head>
 <body>
   <div class="container">
-    <!-- Confirmation Modal -->
-    <div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title" id="confirmModalLabel">Confirm action</h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-          </div>
-          <div class="modal-body" id="confirmModalBody"></div>
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-            <button type="button" class="btn btn-primary" id="confirmOkBtn">OK</button>
+<!-- Confirmation Modal -->
+      <div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="confirmModalLabel">Confirm action</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="confirmModalBody"></div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+              <button type="button" class="btn btn-primary" id="confirmOkBtn">OK</button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+
+      <!-- Dependencies Modal -->
+      <div class="modal fade" id="dependenciesModal" tabindex="-1" aria-labelledby="dependenciesModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="dependenciesModalLabel">Project Dependencies</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="dependenciesModalBody">
+              <!-- Content filled by JS -->
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
     <!-- Toast container -->
     <div id="toastContainer" class="position-fixed bottom-0 end-0 p-3" style="z-index: 1080;"></div>
       <header class="mb-4 d-flex justify-content-between align-items-start">
@@ -51,6 +69,13 @@
 
     <div class="row g-4">
       <div class="col-lg-4">
+          <!-- Dependencies Card -->
+          <div class="card mt-3" id="dependenciesCard" style="display:none;">
+            <div class="card-body">
+              <h5 class="card-title">Dependencies</h5>
+              <div id="dependenciesContent"></div>
+            </div>
+          </div>
         <div class="card">
           <div class="card-body">
             <h5 class="card-title toggle-section" style="cursor: pointer;" data-section="addProjectSection">
@@ -91,11 +116,12 @@
                         </div>
                       </small>
                     </div>
-                    <div class="d-flex gap-1">
-                      <button type="button" class="btn btn-sm btn-outline-success continue-index-btn" data-project-id="{{ p.id }}" title="Continue indexing (incremental)">+</button>
-                      <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="{{ p.id }}" title="Re-index project (full)">⟳</button>
-                      <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="{{ p.id }}" title="Delete project">×</button>
-                    </div>
+<div class="d-flex gap-1">
+                       <button type="button" class="btn btn-sm btn-outline-success continue-index-btn" data-project-id="{{ p.id }}" title="Continue indexing (incremental)">+</button>
+                       <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="{{ p.id }}" title="Re-index project (full)">⟳</button>
+                       <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="{{ p.id }}" title="Delete project">×</button>
+                       <button type="button" class="btn btn-sm btn-outline-info view-deps-btn" data-project-id="{{ p.id }}" title="View dependencies">📦</button>
+                     </div>
                   </li>
                 {% endfor %}
               </ul>
@@ -186,11 +212,12 @@
           </div>
         </small>
       </div>
-      <div class="d-flex gap-1">
-        <button type="button" class="btn btn-sm btn-outline-success continue-index-btn" data-project-id="${id}" title="Continue indexing (incremental)">+</button>
-        <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="${id}" title="Re-index project (full)">⟳</button>
-        <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="${id}" title="Delete project">×</button>
-      </div>
+<div class="d-flex gap-1">
+          <button type="button" class="btn btn-sm btn-outline-success continue-index-btn" data-project-id="${id}" title="Continue indexing (incremental)">+</button>
+          <button type="button" class="btn btn-sm btn-outline-primary reindex-project-btn" data-project-id="${id}" title="Re-index project (full)">⟳</button>
+          <button type="button" class="btn btn-sm btn-outline-danger delete-project-btn" data-project-id="${id}" title="Delete project">×</button>
+          <button type="button" class="btn btn-sm btn-outline-info view-deps-btn" data-project-id="${id}" title="View dependencies">📦</button>
+        </div>
     </li>
   </template>
   <template id="toast-template">
