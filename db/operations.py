@@ -91,7 +91,11 @@ def init_db(database_path: str) -> None:
             """
         )
         
+        try:
         conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
     finally:
         conn.close()
 
@@ -136,8 +140,14 @@ def insert_chunk_row_with_null_embedding(database_path: str, file_id: int, path:
             "INSERT INTO chunks (file_id, path, chunk_index) VALUES (?, ?, ?)",
             (file_id, path, chunk_index),
         )
-        conn.commit()
-        return int(cur.lastrowid)
+        try:
+            conn.commit()
+            return int(cur.lastrowid)
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
     finally:
         conn.close()
 
@@ -216,13 +226,16 @@ def clear_project_data(database_path: str) -> None:
         cur.execute("DELETE FROM files")
         # Clear vector metadata to allow re-indexing with different embedding dimensions
         cur.execute("DELETE FROM vector_meta WHERE key = 'dimension'")
-        conn.commit()
-        
-        # Invalidate caches
-        stats_cache.invalidate(f"stats:{database_path}")
-        file_cache.clear()  # Clear all file cache since we deleted everything
-    finally:
-        conn.close()
+        try:
+            conn.commit()
+            # Invalidate caches
+            stats_cache.invalidate(f"stats:{database_path}")
+            file_cache.clear()  # Clear all file cache since we deleted everything
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
 
 
 def get_file_by_path(database_path: str, path: str) -> Optional[Dict[str, Any]]:
@@ -284,7 +297,11 @@ def set_project_metadata(database_path: str, key: str, value: str) -> None:
             """,
             (key, value)
         )
+        try:
         conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
     finally:
         conn.close()
 
@@ -312,7 +329,11 @@ def set_project_metadata_batch(database_path: str, metadata: Dict[str, str]) -> 
                 """,
                 (key, value)
             )
+        try:
         conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
     finally:
         conn.close()
 
@@ -348,7 +369,11 @@ def delete_file_by_path(database_path: str, path: str) -> None:
             cur.execute("DELETE FROM chunks WHERE file_id = ?", (file_id,))
             # Delete file
             cur.execute("DELETE FROM files WHERE id = ?", (file_id,))
-            conn.commit()
+            try:
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
     finally:
         conn.close()
 
@@ -414,12 +439,15 @@ def _init_registry_db():
             )
             """
         )
-        conn.commit()
-    except Exception as e:
-        _LOG.error(f"Failed to initialize registry database: {e}")
-        raise
-    finally:
-        conn.close()
+try:
+            conn.commit()
+            # Invalidate cache after update
+            project_cache.invalidate(f"project:id:{project_id}")
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
 
 
 def create_project(project_path: str, name: Optional[str] = None) -> Dict[str, Any]:
@@ -629,7 +657,11 @@ def update_project_status(project_id: str, status: str, last_indexed_at: Optiona
                     "UPDATE projects SET status = ? WHERE id = ?",
                     (status, project_id)
                 )
+try:
             conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
         finally:
             conn.close()
     
@@ -654,7 +686,11 @@ def update_project_settings(project_id: str, settings: Dict[str, Any]):
                 "UPDATE projects SET settings = ? WHERE id = ?",
                 (json.dumps(settings), project_id)
             )
+try:
             conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
         finally:
             conn.close()
     
@@ -686,7 +722,11 @@ def delete_project(project_id: str):
         try:
             cur = conn.cursor()
             cur.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+try:
             conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
         finally:
             conn.close()
     

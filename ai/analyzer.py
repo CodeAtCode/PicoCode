@@ -54,7 +54,7 @@ EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
 PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
 # Timeout for future.result() must account for retries: (max_retries + 1) × SDK_timeout + buffer
 # With SDK timeout of 15s and max_retries=2, this allows 3 × 15s = 45s + 15s buffer = 60s
-EMBEDDING_TIMEOUT = 60  # Timeout in seconds for each embedding API call (including retries)
+EMBEDDING_TIMEOUT = 30  # Timeout in seconds for each embedding API call (including retries)
 FILE_PROCESSING_TIMEOUT = 300  # Timeout in seconds for processing a single file (5 minutes)
 
 _FILE_EXECUTOR_WORKERS = 4
