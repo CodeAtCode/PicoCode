@@ -10,8 +10,14 @@ from openai import OpenAI
 
 from utils.config import CFG
 
-# Instantiate client exactly as you requested, reading the key from the standard env var.
-_client = OpenAI(api_key=CFG.get("api_key"), base_url=CFG.get("api_url"),)
+# Instantiate client, but handle missing API key gracefully for environments where it is not set.
+try:
+    _client = OpenAI(api_key=CFG.get("api_key"), base_url=CFG.get("api_url"))
+except Exception as e:
+    # Log the issue and proceed with a None client; functions will raise if used without proper configuration.
+    _client = None
+    _embedding_logger = logging.getLogger("ai.analyzer.embedding")
+    _embedding_logger.warning(f"OpenAI client could not be initialized: {e}")
 
 # Default models come from CFG (loaded from .env). Analyzer can pass model explicitly too.
 DEFAULT_EMBEDDING_MODEL = CFG.get("embedding_model")

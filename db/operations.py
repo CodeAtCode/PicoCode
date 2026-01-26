@@ -281,7 +281,7 @@ def needs_reindex(database_path: str, path: str, current_mtime: float, current_h
 
 def set_project_metadata(database_path: str, key: str, value: str) -> None:
     """
-    Set a project metadata key-value pair.
+    Set a project metadata key-value pair and invalidate cache.
     """
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
@@ -297,6 +297,8 @@ def set_project_metadata(database_path: str, key: str, value: str) -> None:
             (key, value)
         )
         conn.commit()
+        # Invalidate project cache as metadata may affect project queries
+        project_cache.clear()
     except Exception as e:
         conn.rollback()
         raise e
@@ -437,8 +439,8 @@ def _init_registry_db():
             """
         )
         conn.commit()
-        # Invalidate cache after update
-        project_cache.invalidate(f"project:id:{project_id}")
+        # Invalidate cache after update (no specific project_id at this point)
+        # Removed erroneous reference to undefined variable.
     except Exception as e:
         conn.rollback()
         raise e

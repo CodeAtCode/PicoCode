@@ -299,29 +299,31 @@ class FileWatcher:
         file_hashes = {}
         
         try:
-            for root, dirs, files in os.walk(directory):
-                # Filter out ignored directories
-                dirs[:] = [d for d in dirs if d not in self._ignored_dirs]
-                
-                for filename in files:
-                    # Check if file extension is monitored
-                    ext = Path(filename).suffix.lower()
-                    if ext not in self._monitored_extensions:
-                        continue
-                    
-                    filepath = os.path.join(root, filename)
-                    
-                    try:
-                        # Use both modification time and file size as signature
-                        # Format: "mtime|size" (using pipe as separator to avoid conflicts)
-                        stat = os.stat(filepath)
-                        mtime = stat.st_mtime
-                        size = stat.st_size
-                        relative_path = os.path.relpath(filepath, directory)
-                        file_hashes[relative_path] = f"{mtime}|{size}"
-                    except (OSError, ValueError):
-                        # Skip files we can't access
-                        continue
+            # Use a stack for iterative directory traversal with os.scandir for better performance
+            stack = [directory]
+            while stack:
+                current_dir = stack.pop()
+                try:
+                    with os.scandir(current_dir) as it:
+                        for entry in it:
+                            if entry.is_dir(follow_symlinks=False):
+                                if entry.name in self._ignored_dirs:
+                                    continue
+                                stack.append(entry.path)
+                            elif entry.is_file(follow_symlinks=False):
+                                ext = Path(entry.name).suffix.lower()
+                                if ext not in self._monitored_extensions:
+                                    continue
+                                try:
+                                    stat = entry.stat()
+                                    mtime = stat.st_mtime
+                                    size = stat.st_size
+                                    relative_path = os.path.relpath(entry.path, directory)
+                                    file_hashes[relative_path] = f"{mtime}|{size}"
+                                except (OSError, ValueError):
+                                    continue
+                except PermissionError:
+                    continue
         
         except Exception as e:
             self.logger.error(f"Error scanning directory {directory}: {e}")

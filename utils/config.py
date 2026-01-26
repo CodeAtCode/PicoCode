@@ -45,4 +45,5 @@ CFG = {
     
     # Debug configuration
     "debug": _bool_env("DEBUG", False),
+    "db_writer_workers": _int_env("DB_WRITER_WORKERS", 2),
 }

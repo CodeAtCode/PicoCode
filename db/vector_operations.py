@@ -194,6 +194,8 @@ def insert_chunk_vector_with_retry(conn: sqlite3.Connection, file_id: int, path:
         raise RuntimeError(f"Failed to INSERT chunk vector after retries: {e}") from e
 
 
+_CACHED_DIM = None
+
 def search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
     """
     Uses vector_full_scan to retrieve nearest neighbors from the chunks table.
@@ -218,14 +220,19 @@ def search_vectors(database_path: str, q_vector: List[float], top_k: int = 5) ->
 
         # Ensure vector index is initialized before searching
         cur = conn.cursor()
-        cur.execute("SELECT value FROM vector_meta WHERE key = 'dimension'")
-        row = cur.fetchone()
-        if not row:
-            # No dimension stored means no vectors have been indexed yet
-            logger.info("No vector dimension found in metadata - no chunks indexed yet")
-            return []
-        
-        dim = int(row[0])
+        global _CACHED_DIM
+        # Use cached dimension if available
+        if _CACHED_DIM is not None:
+            dim = _CACHED_DIM
+        else:
+            cur.execute("SELECT value FROM vector_meta WHERE key = 'dimension'")
+            row = cur.fetchone()
+            if not row:
+                # No dimension stored means no vectors have been indexed yet
+                logger.info("No vector dimension found in metadata - no chunks indexed yet")
+                return []
+            dim = int(row[0])
+            _CACHED_DIM = dim  # cache for future calls
         try:
             conn.execute(f"SELECT vector_init('chunks', 'embedding', 'dimension={dim},type=FLOAT32,distance=COSINE')")
             logger.debug(f"Vector index initialized for search with dimension {dim}")
@@ -297,9 +304,9 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Option
             logger.error("Project path not found in metadata, cannot read file from filesystem")
             raise RuntimeError("Project path metadata is missing - ensure the indexing process has stored project metadata properly")
         
-        # Construct full file path and resolve to absolute path
-        full_path = os.path.abspath(os.path.join(project_path, file_path))
-        normalized_project_path = os.path.abspath(project_path)
+        # Construct full file path and resolve to absolute path, using realpath to resolve symlinks
+        full_path = os.path.abspath(os.path.realpath(os.path.join(project_path, file_path)))
+        normalized_project_path = os.path.abspath(os.path.realpath(project_path))
         
         # Security check: ensure the resolved path is within the project directory
         try:
@@ -326,7 +333,13 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> Option
             return None
         
         # Import chunk size parameters from analyzer module
-        from ai.analyzer import CHUNK_SIZE, CHUNK_OVERLAP
+        # Import chunk size parameters, but avoid heavy imports that require API keys
+        try:
+            from ai.analyzer import CHUNK_SIZE, CHUNK_OVERLAP
+        except Exception:
+            # Fallback defaults matching analyzer defaults
+            CHUNK_SIZE = 800
+            CHUNK_OVERLAP = 100
         
         # Extract the chunk
         if CHUNK_SIZE <= 0:

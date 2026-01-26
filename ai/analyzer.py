@@ -54,18 +54,27 @@ EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
 PROGRESS_LOG_INTERVAL = 10  # Log progress every N completed files
 # Timeout for future.result() must account for retries: (max_retries + 1) × SDK_timeout + buffer
 # With SDK timeout of 15s and max_retries=2, this allows 3 × 15s = 45s + 15s buffer = 60s
-EMBEDDING_TIMEOUT = 30  # Timeout in seconds for each embedding API call (including retries)
-FILE_PROCESSING_TIMEOUT = 300  # Timeout in seconds for processing a single file (5 minutes)
+EMBEDDING_TIMEOUT = 15  # Reduced timeout in seconds for each embedding API call (including retries)
+FILE_PROCESSING_TIMEOUT = 120  # Reduced timeout in seconds for processing a single file (2 minutes)
 
-_FILE_EXECUTOR_WORKERS = 4
-_EMBEDDING_EXECUTOR_WORKERS = 4
+# Adaptive thread pool sizing based on system resources
+import os
+cpu_count = os.cpu_count() or 1
+# Use a fraction of CPUs for file processing and embedding to avoid oversubscription
+_FILE_EXECUTOR_WORKERS = max(2, min(8, cpu_count // 2))
+_EMBEDDING_EXECUTOR_WORKERS = max(2, min(8, cpu_count // 2))
 _FILE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_FILE_EXECUTOR_WORKERS)
 _EMBEDDING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_EMBEDDING_EXECUTOR_WORKERS)
 
 logger = get_logger(__name__)
 
 # Initialize llama-index embedding client
-_embedding_client = OpenAICompatibleEmbedding()
+# Initialize embedding client lazily; handle missing API key gracefully
+try:
+    _embedding_client = OpenAICompatibleEmbedding()
+except Exception as e:
+    _embedding_client = None
+    logger.warning(f"OpenAICompatibleEmbedding could not be initialized: {e}")
 
 # Thread-local storage to track execution state inside futures
 _thread_state = threading.local()
@@ -87,6 +96,9 @@ def _get_embedding_with_semaphore(semaphore: threading.Semaphore, text: str, fil
     try:
         _thread_state.stage = "calling_embed_text"
         # Use llama-index embedding client
+        if _embedding_client is None:
+            logger.error("Embedding client not initialized; cannot generate embedding.")
+            raise RuntimeError("Embedding client not initialized")
         result = _embedding_client._get_text_embedding(text)
         _thread_state.stage = "completed"
         return result
