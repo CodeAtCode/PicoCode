@@ -4,11 +4,12 @@ Provides RAG functionality using llama-index with sqlite-vector backend.
 """
 from typing import List
 from llama_index.core import Document
-from llama_index.core.vector_stores.types import VectorStoreQuery
+# VectorStoreQuery not needed with custom search_vectors
+from db.vector_operations import search_vectors, get_chunk_text
 
 from .llama_embeddings import OpenAICompatibleEmbedding
 # Use LlamaIndex native SQLiteVectorStore
-from llama_index.vector_stores import SQLiteVectorStore
+# SQLiteVectorStore not available; using custom search_vectors
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -36,31 +37,31 @@ def llama_index_search(query: str, database_path: str, top_k: int = 5) -> List[D
             logger.warning("Failed to generate query embedding")
             return []
         
-        # Create vector store
-        vector_store = SQLiteVectorStore(database_path)
+        # Use custom search_vectors to retrieve matching chunks
+        results = search_vectors(database_path, q_emb, top_k=top_k)
         
-        # Create query
-        vector_query = VectorStoreQuery(
-            query_embedding=q_emb,
-            similarity_top_k=top_k
-        )
-        
-        # Execute query
-        query_result = vector_store.query(vector_query)
-        
-        # Convert TextNodes to Documents
         docs: List[Document] = []
-        for node, score in zip(query_result.nodes, query_result.similarities):
+        for result in results:
+            file_id = result.get("file_id")
+            path = result.get("path")
+            chunk_index = result.get("chunk_index")
+            score = result.get("score")
+            # Retrieve the actual chunk text using get_chunk_text
+            chunk_text = get_chunk_text(database_path, file_id, chunk_index)
+            if not chunk_text:
+                continue
             doc = Document(
-                text=node.text,
+                text=chunk_text,
                 metadata={
-                    **node.metadata,
-                    "score": score
-                }
+                    "file_id": file_id,
+                    "path": path,
+                    "chunk_index": chunk_index,
+                    "score": score,
+                },
             )
             docs.append(doc)
         
-        logger.info(f"llama-index search returned {len(docs)} documents")
+        logger.info(f"Custom search returned {len(docs)} documents")
         return docs
         
     except Exception as e:
