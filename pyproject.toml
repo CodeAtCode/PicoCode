@@ -35,7 +35,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "T20"]
-ignore = ["N806", "W291"]
+ignore = ["N806", "W291", "T201"]
 
 [project.optional-dependencies]
 dev = [

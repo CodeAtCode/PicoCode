@@ -2,33 +2,28 @@
 LlamaIndex integration for document retrieval.
 Provides RAG functionality using llama-index with sqlite-vector backend.
 """
-from typing import List
+
 from llama_index.core import Document
 
-from llama_index.core.vector_stores.types import VectorStoreQuery
-from llama_index.core.schema import TextNode
-
-
+from db.vector_operations import get_chunk_text, search_vectors
+from utils.logger import get_logger
 
 from .llama_embeddings import OpenAICompatibleEmbedding
-
-from utils.logger import get_logger
-from db.vector_operations import search_vectors, get_chunk_text
 
 logger = get_logger(__name__)
 
 _embedding_client = OpenAICompatibleEmbedding()
 
 
-def llama_index_search(query: str, database_path: str, top_k: int = 5) -> List[Document]:
+def llama_index_search(query: str, database_path: str, top_k: int = 5) -> list[Document]:
     """
     Perform semantic search using llama-index with sqlite-vector backend.
-    
+
     Args:
         query: Search query text
         database_path: Path to project database
         top_k: Number of results to return
-    
+
     Returns:
         List of Document objects with chunk text and metadata
     """
@@ -37,10 +32,10 @@ def llama_index_search(query: str, database_path: str, top_k: int = 5) -> List[D
         if not q_emb:
             logger.warning("Failed to generate query embedding")
             return []
-        
+
         results = search_vectors(database_path, q_emb, top_k=top_k)
-        
-        docs: List[Document] = []
+
+        docs: list[Document] = []
         for result in results:
             file_id = result.get("file_id")
             path = result.get("path")
@@ -59,12 +54,10 @@ def llama_index_search(query: str, database_path: str, top_k: int = 5) -> List[D
                 },
             )
             docs.append(doc)
-        
+
         logger.info(f"Custom search returned {len(docs)} documents")
         return docs
-        
+
     except Exception as e:
         logger.exception(f"llama-index search failed: {e}")
         return []
-
-

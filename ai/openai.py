@@ -1,11 +1,7 @@
-from typing import Optional, List, Dict, Any
-import os
-import time
-import uuid
-import json
 import logging
-import traceback
 import threading
+import time
+
 from openai import OpenAI
 
 from utils.config import CFG
@@ -32,20 +28,22 @@ _CIRCUIT_BREAKER_TIMEOUT = 60.0  # seconds to wait before retry when open
 _circuit_state = {"failures": 0, "open_until": 0}
 _circuit_lock = threading.Lock()
 
+
 def _check_rate_limit():
     """Simple token bucket rate limiter"""
     with _rate_limit_lock:
         now = time.time()
         while _rate_limit_times and _rate_limit_times[0] < now - _RATE_LIMIT_WINDOW:
             _rate_limit_times.pop(0)
-        
+
         if len(_rate_limit_times) >= _RATE_LIMIT_CALLS:
             sleep_time = _rate_limit_times[0] + _RATE_LIMIT_WINDOW - now
             if sleep_time > 0:
                 time.sleep(sleep_time)
                 return _check_rate_limit()
-        
+
         _rate_limit_times.append(now)
+
 
 def _check_circuit_breaker():
     """Check if circuit breaker is open"""
@@ -53,11 +51,13 @@ def _check_circuit_breaker():
         if _circuit_state["open_until"] > time.time():
             raise RuntimeError(f"Circuit breaker open: too many recent failures. Retry after {_circuit_state['open_until'] - time.time():.1f}s")
 
+
 def _record_success():
     """Reset circuit breaker on successful call"""
     with _circuit_lock:
         _circuit_state["failures"] = 0
         _circuit_state["open_until"] = 0
+
 
 def _record_failure():
     """Increment failure counter and potentially open circuit"""
@@ -66,17 +66,14 @@ def _record_failure():
         if _circuit_state["failures"] >= _CIRCUIT_BREAKER_THRESHOLD:
             _circuit_state["open_until"] = time.time() + _CIRCUIT_BREAKER_TIMEOUT
 
+
 def _retry_with_backoff(func, *args, **kwargs):
     """Retry function with exponential backoff on transient errors"""
     max_retries = 3
     base_delay = 1.0
-    
-    transient_error_keywords = [
-        'timeout', 'timed out', 'connection', 'network', 
-        'temporary', 'unavailable', 'rate limit', '429', 
-        '500', '502', '503', '504', 'overload'
-    ]
-    
+
+    transient_error_keywords = ["timeout", "timed out", "connection", "network", "temporary", "unavailable", "rate limit", "429", "500", "502", "503", "504", "overload"]
+
     for attempt in range(max_retries):
         try:
             _check_circuit_breaker()
@@ -87,24 +84,26 @@ def _retry_with_backoff(func, *args, **kwargs):
         except Exception as e:
             error_str = str(e).lower()
             is_transient = any(keyword in error_str for keyword in transient_error_keywords)
-            
+
             _record_failure()
-            
+
             if attempt == max_retries - 1:
                 raise
-            
+
             if not is_transient and attempt > 0:
                 raise
-            
-            delay = base_delay * (2 ** attempt)
+
+            delay = base_delay * (2**attempt)
             time.sleep(delay)
+
 
 class EmbeddingError(Exception):
     """Custom exception for embedding failures"""
+
     pass
 
 
-def call_coding_api(prompt: str, model: Optional[str] = None, max_tokens: int = 1024):
+def call_coding_api(prompt: str, model: str | None = None, max_tokens: int = 1024):
     """
     Call a generative/coding model via the new OpenAI client.
     Includes rate limiting, retry logic with exponential backoff, and circuit breaker.
@@ -118,11 +117,7 @@ def call_coding_api(prompt: str, model: Optional[str] = None, max_tokens: int = 
 
     def _call_model():
         if hasattr(_client, "chat") and hasattr(_client.chat, "completions") and hasattr(_client.chat.completions, "create"):
-            resp = _client.chat.completions.create(
-                model=model_to_use,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens
-            )
+            resp = _client.chat.completions.create(model=model_to_use, messages=[{"role": "user", "content": prompt}], max_tokens=max_tokens)
             if resp and getattr(resp, "choices", None):
                 choice = resp.choices[0]
                 if hasattr(choice, "message") and getattr(choice.message, "content", None):
@@ -158,7 +153,7 @@ def call_coding_api(prompt: str, model: Optional[str] = None, max_tokens: int = 
                     return "\n".join(parts)
 
         raise RuntimeError("OpenAI client did not return a usable completion for the provided model.")
-    
+
     try:
         return _retry_with_backoff(_call_model)
     except Exception as e:

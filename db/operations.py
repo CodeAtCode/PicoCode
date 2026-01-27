@@ -77,6 +77,18 @@ def init_db(database_path: str) -> None:
             )
             """
         )
+        # Table to store usage count per dependency (per project, per language, per dependency name)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dependency_usage (
+                project_id TEXT NOT NULL,
+                language TEXT NOT NULL,
+                name TEXT NOT NULL,
+                file_count INTEGER NOT NULL,
+                PRIMARY KEY (project_id, language, name)
+            )
+            """
+        )
         # Create cache table for project dependencies
         cur.execute(
             """
@@ -121,8 +133,26 @@ def store_file(database_path, path, content, language, last_modified=None, file_
     """
     params = (path, language, snippet, last_modified, file_hash)
 
+    # If the database file does not exist (e.g., project deleted), skip storing
+    if not os.path.exists(database_path):
+        return None
     writer = get_writer(database_path)
-    rowid = writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
+    try:
+        rowid = writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
+    except Exception as e:
+        # If the tables are missing, initialise the DB and retry once
+        if isinstance(e, Exception) and "no such table" in str(e):
+            try:
+                init_db(database_path)
+                rowid = writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
+                _LOG.info(f"store_file succeeded after re‑initialising DB {database_path}")
+                return rowid
+            except Exception as e2:
+                _LOG.error(f"store_file retry failed for {database_path}: {e2}")
+                return None
+        # Log and ignore other DB errors that can occur during deletion
+        _LOG.error(f"store_file error for {database_path}: {e}")
+        return None
     # Invalidate cached project stats so UI sees updated file count immediately
     try:
         stats_cache.invalidate(f"stats:{database_path}")
@@ -359,6 +389,81 @@ def clear_project_dependencies(database_path: str, project_id: str) -> None:
         cur = conn.cursor()
         cur.execute("DELETE FROM project_dependencies WHERE project_id = ?", (project_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def compute_dependency_usage(database_path: str, project_path: str, deps: dict) -> dict:
+    """Compute how many indexed files belong to each dependency.
+    Returns a nested dict: { language: { name: file_count, ... }, ... }
+    Matching is done using a regex that looks for the dependency name as a path component
+    to reduce false positives (e.g., matching "log" inside "catalog").
+    """
+    import re
+
+    # Gather all stored file paths (relative to project root)
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT path FROM files")
+        rows = cur.fetchall()
+        file_paths = [row["path"] for row in rows]
+    finally:
+        conn.close()
+    usage: dict = {}
+    for lang, dep_list in deps.items():
+        usage.setdefault(lang, {})
+        for dep in dep_list:
+            name = dep.get("name")
+            if not name:
+                continue
+            # Build a regex that matches the dependency name as a directory or file component
+            pattern = re.compile(rf"[/\\]({re.escape(name)})(?:[-_][\w]+)?[/\\]", re.IGNORECASE)
+            count = sum(1 for p in file_paths if pattern.search(p))
+            usage[lang][name] = count
+    return usage
+
+
+def store_dependency_usage(database_path: str, project_id: str, usage: dict) -> None:
+    """Store per‑dependency file usage counts.
+    `usage` format: { language: { name: count, ... }, ... }
+    Existing rows for the same project and language/name are replaced.
+    """
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
+    try:
+        cur = conn.cursor()
+        # Delete old usage rows for this project
+        cur.execute("DELETE FROM dependency_usage WHERE project_id = ?", (project_id,))
+        for lang, deps in usage.items():
+            for name, count in deps.items():
+                cur.execute(
+                    "INSERT INTO dependency_usage (project_id, language, name, file_count) VALUES (?, ?, ?, ?)",
+                    (project_id, lang, name, int(count)),
+                )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def load_dependency_usage(database_path: str, project_id: str) -> dict:
+    """Load dependency usage counts.
+    Returns dict[language][name] = file_count (empty dict if none).
+    """
+    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT language, name, file_count FROM dependency_usage WHERE project_id = ?", (project_id,))
+        rows = cur.fetchall()
+        result: dict = {}
+        for row in rows:
+            lang = row["language"]
+            name = row["name"]
+            count = row["file_count"]
+            result.setdefault(lang, {})[name] = count
+        return result
     finally:
         conn.close()
 
@@ -692,7 +797,12 @@ def update_project_settings(project_id: str, settings: dict[str, Any]):
 
 
 def delete_project(project_id: str):
-    """Delete a project and its database, invalidating cache."""
+    """Delete a project and its database, invalidating cache.
+
+    Also stops any active DBWriter workers for the project's database to avoid
+    background indexing threads writing to a removed file, which can corrupt the
+    SQLite file and produce ``NOT NULL constraint failed: chunks.file_id`` errors.
+    """
     _init_registry_db()
 
     project = get_project_by_id(project_id)
@@ -701,6 +811,15 @@ def delete_project(project_id: str):
 
     db_path = project.get("database_path")
     if db_path and os.path.exists(db_path):
+        # Stop any DBWriter workers that may still be processing writes for this DB.
+        try:
+            from db.db_writer import stop_writer
+
+            # Stop the writer for this specific database to avoid affecting other projects.
+            stop_writer(db_path)
+        except Exception:
+            pass
+        # Now safely remove the file.
         try:
             os.remove(db_path)
         except Exception:

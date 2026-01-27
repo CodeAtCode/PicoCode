@@ -1,9 +1,9 @@
 """
 Simple rate limiter middleware for FastAPI endpoints.
 """
-import time
+
 import threading
-from typing import Dict, Tuple
+import time
 from collections import defaultdict
 
 
@@ -12,43 +12,43 @@ class RateLimiter:
     Token bucket rate limiter for API endpoints.
     Thread-safe implementation.
     """
-    
+
     def __init__(self, calls: int = 100, window: int = 60):
         """
         Initialize rate limiter.
-        
+
         Args:
             calls: Maximum number of calls allowed
             window: Time window in seconds
         """
         self.calls = calls
         self.window = window
-        self._storage: Dict[str, list] = defaultdict(list)
+        self._storage: dict[str, list] = defaultdict(list)
         self._lock = threading.Lock()
-    
-    def is_allowed(self, key: str) -> Tuple[bool, int]:
+
+    def is_allowed(self, key: str) -> tuple[bool, int]:
         """
         Check if request is allowed under rate limit.
-        
+
         Args:
             key: Identifier for rate limit (e.g., IP address)
-        
+
         Returns:
             Tuple of (allowed: bool, retry_after: int seconds)
         """
         with self._lock:
             now = time.time()
             timestamps = self._storage[key]
-            
+
             timestamps[:] = [ts for ts in timestamps if ts > now - self.window]
-            
+
             if len(timestamps) >= self.calls:
                 retry_after = int(timestamps[0] + self.window - now) + 1
                 return False, retry_after
-            
+
             timestamps.append(now)
             return True, 0
-    
+
     def reset(self, key: str):
         """Reset rate limit for a key."""
         with self._lock:

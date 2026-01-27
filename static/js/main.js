@@ -248,35 +248,28 @@ async function pollProjects() {
     const response = await fetch('/projects/status');
     const projects = await response.json();
     const $list = $('#projectsList');
+    // Clear the list to avoid duplicates
+    $list.empty();
     if (projects.length === 0) {
-      $list.empty();
       $list.append('<p class="text-muted small mb-0">No projects yet. Index a project to get started.</p>');
       return;
     }
-    // Update or add project items without wiping the whole list
+    // Build each project item using the template
     projects.forEach(p => {
-      let $item = $(`[data-project-id="${p.id}"]`);
-      if ($item.length === 0) {
-        // create new item from template
-        const $projTemplate = $('#project-item-template').contents().clone();
-        $projTemplate.attr('data-project-id', p.id);
-        $projTemplate.find('.fw-bold.text-black').text(p.name || p.path.split('/').pop());
-        $projTemplate.find('small.text-muted').first().text(p.path);
-        const statusClass = p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary';
-        $projTemplate.find('.badge').attr('class', `badge bg-${statusClass}`).attr('data-status', p.status).text(p.status);
-        $projTemplate.find('.continue-index-btn').attr('data-project-id', p.id);
-        $projTemplate.find('.reindex-project-btn').attr('data-project-id', p.id);
-        $projTemplate.find('.delete-project-btn').attr('data-project-id', p.id);
-        $projTemplate.find('.view-deps-btn').attr('data-project-id', p.id);
-        $list.append($projTemplate);
-        $item = $(`[data-project-id="${p.id}"]`);
-      }
-      // Update status badge
-      const $badge = $item.find('.badge');
-      if ($badge.length) {
-        const statusClass = p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary';
-        $badge.attr('class', `badge bg-${statusClass}`).attr('data-status', p.status).text(p.status);
-      }
+      const $projTemplate = $('#project-item-template').contents().clone();
+      $projTemplate.attr('data-project-id', p.id);
+      $projTemplate.find('.fw-bold.text-black').text(p.name || p.path.split('/').pop());
+      $projTemplate.find('small.text-muted').first().text(p.path);
+      const statusClass = p.status === 'ready' ? 'success' : p.status === 'indexing' ? 'warning' : 'secondary';
+      $projTemplate.find('.badge').attr('class', `badge bg-${statusClass}`).attr('data-status', p.status).text(p.status);
+      // Set data attributes on action buttons
+      $projTemplate.find('.continue-index-btn').attr('data-project-id', p.id);
+      $projTemplate.find('.reindex-project-btn').attr('data-project-id', p.id);
+      $projTemplate.find('.delete-project-btn').attr('data-project-id', p.id);
+      $projTemplate.find('.view-deps-btn').attr('data-project-id', p.id);
+      $projTemplate.find('.view-all-deps-btn').attr('data-project-id', p.id);
+      // Append to list
+      $list.append($projTemplate);
     });
     // Update indexing stats for each project
     for (const p of projects) {
@@ -311,7 +304,7 @@ pollProjects();
 // Then continue polling every 10 seconds
 setInterval(pollProjects, 10000);
 
-   $(document).on('click', '.continue-index-btn', async function(e) {
+$(document).on('click', '.continue-index-btn', async function(e) {
      const projectId = $(this).attr('data-project-id');
      if (!await showConfirm('Continue indexing this project? This will only index new or changed files.')) return;
      try {
@@ -356,20 +349,28 @@ setInterval(pollProjects, 10000);
                 showToast(`Failed to load dependencies: ${err.error || 'unknown'}`, 'danger');
                 return;
             }
-            const deps = await resp.json();
-            // Count total direct dependencies
-            let totalCount = 0;
+            const data = await resp.json();
+            const deps = data.dependencies || {};
+            const metadata = data.metadata || {};
+            // Sort each language array by file_count descending (if present)
             for (const lang in deps) {
-                if (Array.isArray(deps[lang])) totalCount += deps[lang].length;
+                if (Array.isArray(deps[lang])) {
+                    deps[lang].sort((a, b) => (b.file_count || 0) - (a.file_count || 0));
+                }
             }
-            // Build HTML content for modal body (including count)
-            let html = `<p><strong>Total direct dependencies indexed:</strong> ${totalCount}</p>`;
+            // Build HTML content for modal body
+            let html = '';
+            if (metadata.indexed_file_count !== undefined) {
+                html += `<p><strong>Files indexed in project:</strong> ${metadata.indexed_file_count}</p>`;
+            }
+            // List dependencies with file count per dependency
             for (const lang in deps) {
                 if (Array.isArray(deps[lang]) && deps[lang].length) {
                     html += `<h6 class="mt-2 text-capitalize">${lang}</h6><ul class="list-group list-group-flush">`;
                     deps[lang].forEach(d => {
                         const version = d.version ? `@ ${d.version}` : '';
-                        html += `<li class="list-group-item py-1">${d.name} ${version}</li>`;
+                        const count = d.file_count !== undefined ? ` (files: ${d.file_count})` : '';
+                        html += `<li class="list-group-item py-1">${d.name} ${version}${count}</li>`;
                     });
                     html += '</ul>';
                 }

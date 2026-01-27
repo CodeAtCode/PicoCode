@@ -2,13 +2,15 @@
 Database writer class for queued write operations.
 Provides thread-safe database write access through a single-writer thread.
 """
-import os
-import sqlite3
+
 import atexit
-import threading
-from typing import List
+import os
 import queue
+import sqlite3
+import threading
+
 from utils.logger import get_logger
+
 from .db_task import _DBTask
 
 _LOG = get_logger(__name__)
@@ -22,15 +24,11 @@ class DBWriter:
         self.database_path = database_path
         self._q = queue.Queue()
         self._stop = threading.Event()
-        self._workers: List[threading.Thread] = []
+        self._workers: list[threading.Thread] = []
         self._timeout_seconds = timeout_seconds
         self._num_workers = max(1, num_workers)
         for i in range(self._num_workers):
-            worker = threading.Thread(
-                target=self._worker,
-                daemon=False,
-                name=f"DBWriter-{database_path}-worker{i+1}"
-            )
+            worker = threading.Thread(target=self._worker, daemon=False, name=f"DBWriter-{database_path}-worker{i + 1}")
             worker.start()
             self._workers.append(worker)
         _LOG.info(f"DBWriter started for database: {database_path} with {self._num_workers} worker(s)")
@@ -113,14 +111,16 @@ class DBWriter:
                     _LOG.warning(f"DBWriter worker thread for {self.database_path} did not stop within 5s")
             _LOG.info(f"DBWriter stopped for database: {self.database_path}")
 
+
 def get_writer(database_path):
     """Get or create a DBWriter instance for a database path.
     Uses multiple worker threads based on configuration to reduce lock contention.
     """
     from utils.config import CFG
+
     cpu = os.cpu_count() or 1
     default_workers = min(4, cpu)  # up to 4 workers
-    num_workers = int(CFG.get('db_writer_workers', default_workers))
+    num_workers = int(CFG.get("db_writer_workers", default_workers))
     if num_workers < 1:
         num_workers = 1
     with _WRITERS_LOCK:
@@ -131,7 +131,24 @@ def get_writer(database_path):
         return w
 
 
+def stop_writer(database_path: str, wait: bool = True):
+    """Stop the DBWriter for a specific database path."""
+    with _WRITERS_LOCK:
+        writer = _WRITERS.pop(database_path, None)
+    if writer:
+        writer.stop(wait=wait)
+
+
 def stop_all_writers():
+    """Stop all DBWriter threads (called automatically at process exit)."""
+    with _WRITERS_LOCK:
+        writers = list(_WRITERS.values())
+        _WRITERS.clear()
+    for w in writers:
+        try:
+            w.stop(wait=True)
+        except Exception:
+            _LOG.exception("Error stopping DBWriter")
     """Stop all DBWriter threads (called automatically at process exit)."""
     with _WRITERS_LOCK:
         writers = list(_WRITERS.values())
