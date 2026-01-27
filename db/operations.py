@@ -68,7 +68,6 @@ def init_db(database_path: str) -> None:
             """
         )
 
-        # Vector metadata table (stores dimension of embeddings)
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS vector_meta (
@@ -77,7 +76,6 @@ def init_db(database_path: str) -> None:
             )
             """
         )
-        # Table to store usage count per dependency (per project, per language, per dependency name)
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS dependency_usage (
@@ -89,7 +87,6 @@ def init_db(database_path: str) -> None:
             )
             """
         )
-        # Create cache table for project dependencies
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS project_dependencies (
@@ -133,27 +130,23 @@ def store_file(database_path, path, content, language, last_modified=None, file_
     """
     params = (path, language, snippet, last_modified, file_hash)
 
-    # If the database file does not exist (e.g., project deleted), skip storing
     if not os.path.exists(database_path):
         return None
     writer = get_writer(database_path)
     try:
         rowid = writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
     except Exception as e:
-        # If the tables are missing, initialise the DB and retry once
-        if isinstance(e, Exception) and "no such table" in str(e):
+        if "no such table" in str(e):
             try:
                 init_db(database_path)
-                rowid = writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
+                rowid = writer.enqueue_and_wait(sql, params, wait_timeout=300.0)
                 _LOG.info(f"store_file succeeded after re‑initialising DB {database_path}")
                 return rowid
             except Exception as e2:
                 _LOG.error(f"store_file retry failed for {database_path}: {e2}")
                 return None
-        # Log and ignore other DB errors that can occur during deletion
         _LOG.error(f"store_file error for {database_path}: {e}")
         return None
-    # Invalidate cached project stats so UI sees updated file count immediately
     try:
         stats_cache.invalidate(f"stats:{database_path}")
     except Exception:
@@ -162,7 +155,6 @@ def store_file(database_path, path, content, language, last_modified=None, file_
 
 
 def get_project_stats(database_path: str) -> dict[str, Any]:
-    # Existing function unchanged
     pass
     """
     Get statistics for a project database.
@@ -197,7 +189,6 @@ def get_file_by_path(database_path: str, path: str) -> dict[str, Any] | None:
     Get file metadata by path for incremental indexing checks.
     Returns None if file doesn't exist or the database/table is missing.
     """
-    # If the database file does not exist (e.g., project was deleted), skip lookup
     if not os.path.exists(database_path):
         return None
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
@@ -205,7 +196,6 @@ def get_file_by_path(database_path: str, path: str) -> dict[str, Any] | None:
         try:
             row = conn.execute("SELECT id, path, last_modified, file_hash FROM files WHERE path = ?", (path,)).fetchone()
         except Exception:
-            # Table may not exist yet – treat as no entry
             return None
         if row:
             return {"id": row["id"], "path": row["path"], "last_modified": row["last_modified"], "file_hash": row["file_hash"]}
@@ -342,7 +332,6 @@ def store_project_dependencies(database_path: str, project_id: str, deps: dict, 
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
-        # Remove old rows for this project & flag
         cur.execute("DELETE FROM project_dependencies WHERE project_id = ? AND is_transitive = ?", (project_id, is_transitive))
         for lang, items in deps.items():
             for item in items:
@@ -368,7 +357,7 @@ def load_cached_dependencies(database_path: str, project_id: str, is_transitive:
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT language, name, version FROM project_dependencies WHERE project_id = ? AND is_transitive = ?",
+            "SELECT language, name, version FROM project_dependencies WHERE project_id = ? AND is_transitive = ? ORDER BY is_transitive ASC, name ASC",
             (project_id, is_transitive),
         )
         rows = cur.fetchall()
@@ -401,7 +390,6 @@ def compute_dependency_usage(database_path: str, project_path: str, deps: dict) 
     """
     import re
 
-    # Gather all stored file paths (relative to project root)
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
@@ -417,7 +405,6 @@ def compute_dependency_usage(database_path: str, project_path: str, deps: dict) 
             name = dep.get("name")
             if not name:
                 continue
-            # Build a regex that matches the dependency name as a directory or file component
             pattern = re.compile(rf"[/\\]({re.escape(name)})(?:[-_][\w]+)?[/\\]", re.IGNORECASE)
             count = sum(1 for p in file_paths if pattern.search(p))
             usage[lang][name] = count
@@ -432,7 +419,6 @@ def store_dependency_usage(database_path: str, project_id: str, usage: dict) -> 
     conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
     try:
         cur = conn.cursor()
-        # Delete old usage rows for this project
         cur.execute("DELETE FROM dependency_usage WHERE project_id = ?", (project_id,))
         for lang, deps in usage.items():
             for name, count in deps.items():
@@ -468,7 +454,6 @@ def load_dependency_usage(database_path: str, project_id: str) -> dict:
         conn.close()
 
 
-# Added clear_project_data for full re-indexing support
 def clear_project_data(database_path: str) -> None:
     """Delete all files, chunks, and vector metadata for a project, and clear cached dependencies.
     Used before a full re‑index to start from a clean state.
@@ -480,11 +465,9 @@ def clear_project_data(database_path: str) -> None:
         cur.execute("DELETE FROM chunks")
         cur.execute("DELETE FROM files")
         cur.execute("DELETE FROM vector_meta WHERE key = 'dimension'")
-        # Clear cached dependencies for the project (project_id is stored in the DB path; higher‑level code will delete them when needed)
         conn.commit()
         stats_cache.invalidate(f"stats:{database_path}")
     except Exception:
-        # Table may not exist for older databases; ignore
         pass
     finally:
         conn.close()
@@ -811,15 +794,12 @@ def delete_project(project_id: str):
 
     db_path = project.get("database_path")
     if db_path and os.path.exists(db_path):
-        # Stop any DBWriter workers that may still be processing writes for this DB.
         try:
             from db.db_writer import stop_writer
 
-            # Stop the writer for this specific database to avoid affecting other projects.
             stop_writer(db_path)
         except Exception:
             pass
-        # Now safely remove the file.
         try:
             os.remove(db_path)
         except Exception:

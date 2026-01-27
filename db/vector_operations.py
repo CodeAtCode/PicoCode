@@ -14,6 +14,7 @@ from utils.logger import get_logger
 from utils.retry import retry_on_exception
 
 logger = get_logger(__name__)
+# _logged_extension_ids = set()  # disabled to avoid repeated logging
 
 SQLITE_VECTOR_PKG = "sqlite_vector.binaries"
 SQLITE_VECTOR_RESOURCE = "vector"
@@ -43,7 +44,8 @@ def load_sqlite_vector_extension(conn: sqlite3.Connection) -> None:
     try:
         ext_path = importlib.resources.files(SQLITE_VECTOR_PKG) / SQLITE_VECTOR_RESOURCE
         conn.load_extension(str(ext_path))
-        logger.debug(f"sqlite-vector extension loaded for connection {id(conn)}")
+        conn_id = id(conn)
+        # Suppress per-connection logging to avoid noisy duplicate messages
         try:
             cur = conn.execute(f"SELECT {SQLITE_VECTOR_VERSION_FN}()")
             _ = cur.fetchone()

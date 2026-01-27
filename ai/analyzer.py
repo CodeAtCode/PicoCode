@@ -23,7 +23,6 @@ from .openai import call_coding_api
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 EXT_LANG = {
-    # Source code language extensions
     ".py": "python",
     ".js": "javascript",
     ".ts": "typescript",
@@ -36,7 +35,6 @@ EXT_LANG = {
     ".html": "html",
     ".css": "css",
     ".md": "markdown",
-    # Dependency manifest files
     "requirements.txt": "python-deps",
     "pyproject.toml": "python-deps",
     "package.json": "javascript-deps",
@@ -48,8 +46,8 @@ EXT_LANG = {
     "build.gradle": "java-deps",
 }
 
-CHUNK_SIZE = 800  # characters per chunk
-CHUNK_OVERLAP = 100  # overlapping characters between chunks
+CHUNK_SIZE = 800
+CHUNK_OVERLAP = 100
 
 EMBEDDING_CONCURRENCY = 4
 EMBEDDING_BATCH_SIZE = 16  # Process embeddings in batches for better throughput
@@ -120,11 +118,9 @@ def detect_language(path: str):
         return "text"
     if "activate_this.py" in path:
         return "text"
-    # Full filename check (e.g., requirements.txt, pyproject.toml, package.json)
     filename = os.path.basename(path)
     if filename in EXT_LANG:
         return EXT_LANG[filename]
-    # Fallback to extension mapping
     ext = Path(path).suffix.lower()
     return EXT_LANG.get(ext, "text")
 
@@ -148,34 +144,35 @@ def _process_file_sync(
         file_num: The current file number being processed (1-indexed)
         total_files: Total number of files to process
     """
+    # Previously skipped .venv and node_modules directories; now we process them so that dependency files are indexed.
+    # if ".venv/" in rel_path or "node_modules/" in rel_path:
+    #     return {"stored": False, "embedded": False, "skipped": True}
     try:
-        try:
-            with open(full_path, encoding="utf-8", errors="ignore") as fh:
-                content = fh.read()
+        with open(full_path, encoding="utf-8", errors="ignore") as fh:
+            content = fh.read()
             mtime = os.path.getmtime(full_path)
-        except Exception:
-            return {"stored": False, "embedded": False, "skipped": False}
+    except Exception:
+        return {"stored": False, "embedded": False, "skipped": False}
 
-        if not content:
-            return {"stored": False, "embedded": False, "skipped": False}
+    if not content:
+        return {"stored": False, "embedded": False, "skipped": False}
 
-        lang = detect_language(rel_path)
-        if lang == "text":
-            return {"stored": False, "embedded": False, "skipped": False}
+    lang = detect_language(rel_path)
+    if lang == "text":
+        return {"stored": False, "embedded": False, "skipped": False}
 
-        import hashlib
+    import hashlib
 
-        file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-        if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
-            return {"stored": False, "embedded": False, "skipped": True}
+    if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
+        return {"stored": False, "embedded": False, "skipped": True}
 
-        try:
-            fid = store_file(database_path, rel_path, content, lang, mtime, file_hash)
-        except Exception:
-            logger.exception("Failed to store file %s", rel_path)
-            return {"stored": False, "embedded": False, "skipped": False}
-
+    try:
+        fid = store_file(database_path, rel_path, content, lang, mtime, file_hash)
+    except Exception:
+        logger.exception("Failed to store file %s", rel_path)
+        return {"stored": False, "embedded": False, "skipped": False}
         _ = Document(text=content, extra_info={"path": rel_path, "lang": lang})
 
         parser = SimpleNodeParser(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
@@ -197,7 +194,6 @@ def _process_file_sync(
         for batch_start in range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE):
             batch = chunk_tasks[batch_start : batch_start + EMBEDDING_BATCH_SIZE]
 
-            # Collect texts for the batch and request embeddings in a single call
             batch_texts = [chunk_doc.text for _, chunk_doc in batch]
             try:
                 batch_embeddings = _embedding_client._get_text_embeddings(batch_texts)
@@ -209,7 +205,6 @@ def _process_file_sync(
             failed_count = 0
             for (idx, _chunk_doc), emb in zip(batch, batch_embeddings, strict=True):
                 if emb:
-                    # Insert embedding into SQLite-vector database
                     from db.connection import db_connection
                     from db.vector_operations import insert_chunk_vector_with_retry
 
@@ -238,6 +233,7 @@ def analyze_local_path_sync(
     max_file_size: int = 200000,
     cfg: dict | None = None,
     incremental: bool = True,
+    exclude_paths: list[str] | None = None,
 ):
     """
     Simplified indexing pipeline using LlamaIndex ingestion.
@@ -259,6 +255,7 @@ def analyze_local_path_sync(
 
     logger.info("Collecting files to index...")
     file_paths: list[dict[str, str]] = []
+    raw_file_paths: list[dict[str, str]] = []
     for root, _, files in os.walk(local_path):
         for fname in files:
             full = os.path.join(root, fname)
@@ -268,16 +265,52 @@ def analyze_local_path_sync(
                     continue
             except Exception:
                 continue
-            file_paths.append({"full": full, "rel": rel})
-    # Prioritize project files over dependencies (.venv, node_modules)
+            raw_file_paths.append({"full": full, "rel": rel})
+    exclusion_patterns: set[str] = {".git", "*.gitignore", "*_cache", "LICENSE*", "*pre-commit*"}
+    if exclude_paths:
+        exclusion_patterns.update(set(exclude_paths))
+    gitignore_path = os.path.join(local_path, ".gitignore")
+    if os.path.isfile(gitignore_path):
+        try:
+            with open(gitignore_path, encoding="utf-8", errors="ignore") as gi:
+                for line in gi:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        exclusion_patterns.add(line)
+        except Exception:
+            pass
+    import fnmatch
+
+    def is_excluded(rel_path: str) -> bool:
+        rel_path_norm = rel_path.replace(os.sep, "/")
+        for pattern in exclusion_patterns:
+            if pattern.endswith("/"):
+                if rel_path_norm.startswith(pattern):
+                    return True
+            if fnmatch.fnmatch(rel_path_norm, pattern) or fnmatch.fnmatch(os.path.basename(rel_path_norm), pattern):
+                return True
+            if pattern in rel_path_norm:
+                return True
+        return False
+
+    file_paths = []
+    excluded_paths: list[str] = []
+    for entry in raw_file_paths:
+        rel_path = entry["rel"].replace(os.sep, "/")
+        if is_excluded(rel_path):
+            excluded_paths.append(rel_path)
+            continue
+        file_paths.append(entry)
+
     project_files = []
     dep_files = []
     for entry in file_paths:
         rel_path = entry["rel"].replace(os.sep, "/")
-        if ".venv/" in rel_path or "node_modules/" in rel_path:
-            dep_files.append(entry)
-        else:
-            project_files.append(entry)
+        if ".git/" not in rel_path:
+            if ".venv/" in rel_path or "node_modules/" in rel_path:
+                dep_files.append(entry)
+            else:
+                project_files.append(entry)
     file_paths = project_files + dep_files
     total_files = len(file_paths)
     logger.info(f"Found {total_files} files to index (project files first)")
@@ -288,7 +321,6 @@ def analyze_local_path_sync(
     except Exception as e:
         logger.warning(f"Failed to store early total_files metadata: {e}")
 
-    # Process files to generate and store embeddings
     semaphore = threading.Semaphore(EMBEDDING_CONCURRENCY)
     for f in file_paths:
         _process_file_sync(
@@ -297,10 +329,10 @@ def analyze_local_path_sync(
             f["full"],
             f["rel"],
             cfg,
-            incremental=True,
+            incremental=incremental,
         )
 
-    # Collect documents for optional vector store index (if needed for other features)
+    logger.info(f"Completed processing {total_files} files for embedding")
     documents: list[Document] = []
     for f in file_paths:
         try:
@@ -351,7 +383,7 @@ def analyze_local_path_sync(
     except Exception:
         pass
 
-    return index
+    return index, excluded_paths
 
 
 def analyze_local_path_background(local_path: str, database_path: str, venv_path: str | None = None, max_file_size: int = 200000, cfg: dict | None = None):

@@ -119,7 +119,7 @@ def get_writer(database_path):
     from utils.config import CFG
 
     cpu = os.cpu_count() or 1
-    default_workers = min(4, cpu)  # up to 4 workers
+    default_workers = min(8, cpu)  # up to 8 workers for higher throughput
     num_workers = int(CFG.get("db_writer_workers", default_workers))
     if num_workers < 1:
         num_workers = 1

@@ -49,11 +49,10 @@ def get_db_connection(db_path: str, timeout: float = 30.0, enable_wal: bool = Tr
     except Exception as e:
         logger.warning(f"Failed to set busy_timeout: {e}")
 
-    # Always load the sqlite-vector extension for vector operations
     from .vector_operations import load_sqlite_vector_extension
 
     load_sqlite_vector_extension(conn)
-    logger.debug(f"Vector extension loaded for connection to {db_path}")
+
     return conn
 
 

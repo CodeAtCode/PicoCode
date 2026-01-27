@@ -36,7 +36,9 @@ class OpenAICompatibleEmbedding(BaseEmbedding):
         self._client = OpenAI(api_key=api_key or CFG.get("api_key"), base_url=api_base or CFG.get("api_url"))
         self._model = model or CFG.get("embedding_model") or "text-embedding-3-small"
 
-        logger.info(f"Initialized OpenAICompatibleEmbedding with model: {self._model}")
+        if not getattr(self.__class__, "_init_logged", False):
+            logger.info(f"Initialized OpenAICompatibleEmbedding with model: {self._model}")
+            self.__class__._init_logged = True
 
     @classmethod
     def class_name(cls) -> str:
@@ -66,7 +68,11 @@ class OpenAICompatibleEmbedding(BaseEmbedding):
 
             if response.data and len(response.data) > 0:
                 embedding = response.data[0].embedding
-                logger.debug(f"Generated embedding with dimension: {len(embedding)}")
+                import re
+
+                match = re.search(r"path:\s*([^\s]+)", text)
+                file_path = match.group(1) if match else "unknown"
+                logger.info(f"Generated embedding (dim {len(embedding)}) for file: {file_path}")
                 return embedding
             else:
                 logger.error("No embedding returned from API")

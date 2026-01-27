@@ -110,7 +110,6 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("FileWatcher is disabled in configuration")
 
-    # Resume indexing for projects that are not ready (run in background threads)
     try:
         import threading
 

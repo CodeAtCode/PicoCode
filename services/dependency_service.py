@@ -5,7 +5,6 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Any
 
-# Set up module‑level logger
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +37,6 @@ def _read_pyproject_toml(project_path: str) -> list[dict[str, str]]:
     try:
         import tomli
     except Exception:
-        # Fallback to built‑in tomllib for Python 3.11+
         try:
             import tomllib as tomli
         except Exception as e:
@@ -92,7 +90,6 @@ def _read_cargo_toml(project_path: str) -> list[dict[str, str]]:
     try:
         import tomli
     except Exception:
-        # Fallback to built‑in tomllib for Python 3.11+
         try:
             import tomllib as tomli
         except Exception as e:
@@ -127,7 +124,6 @@ def _read_cargo_lock(project_path: str) -> list[dict[str, str]]:
     try:
         import tomli
     except Exception:
-        # Fallback to built‑in tomllib for Python 3.11+
         try:
             import tomllib as tomli
         except Exception as e:
@@ -237,31 +233,26 @@ def get_project_dependencies(project_path: str, include_transitive: bool = False
     The returned structure includes keys: python, javascript, rust, go, java.
     """
     result: dict[str, Any] = {}
-    # Python
     py_deps = []
     py_deps.extend(_read_requirements_txt(project_path))
     py_deps.extend(_read_pyproject_toml(project_path))
     if py_deps:
         result["python"] = py_deps
-    # JavaScript
     js_deps = _read_package_json(project_path)
     if js_deps:
         result["javascript"] = js_deps
-    # Rust
     rust_deps = []
     rust_deps.extend(_read_cargo_toml(project_path))
     if include_transitive:
         rust_deps.extend(_read_cargo_lock(project_path))
     if rust_deps:
         result["rust"] = rust_deps
-    # Go
     go_deps = []
     go_deps.extend(_read_go_mod(project_path))
     if include_transitive:
         go_deps.extend(_read_go_sum(project_path))
     if go_deps:
         result["go"] = go_deps
-    # Java
     java_deps = []
     java_deps.extend(_read_pom_xml(project_path))
     java_deps.extend(_read_build_gradle(project_path))

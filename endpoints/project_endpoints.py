@@ -30,21 +30,23 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _add_dependency_metadata(project: dict, db_path: str) -> None:
+    """Append dependency count and indexed flags to the project dict if present in DB."""
+    for meta_key in ["direct_deps_count", "direct_deps_indexed", "full_deps_count", "full_deps_indexed"]:
+        val = get_project_metadata(db_path, meta_key)
+        if val is not None:
+            if meta_key.endswith("_count"):
+                try:
+                    project[meta_key] = int(val)
+                except ValueError:
+                    project[meta_key] = val
+            elif meta_key.endswith("_indexed"):
+                project[meta_key] = int(val) if val.isdigit() else val
+
+
 @router.post("/projects", summary="Create or get a project")
 def api_create_project(request: CreateProjectRequest):
     """Create a new project and return its metadata, including dependency info if available."""
-    """Create a new project and return its metadata, including dependency info if available."""
-    """
-    Create or get a project with per-project database.
-
-    - **path**: Absolute path to project directory (required)
-    - **name**: Optional project name (defaults to directory name)
-
-    Returns project metadata including:
-    - **id**: Unique project identifier
-    - **database_path**: Path to project's SQLite database
-    - **status**: Current project status
-    """
     try:
         project = get_or_create_project(request.path, request.name)
 
@@ -56,18 +58,8 @@ def api_create_project(request: CreateProjectRequest):
         except Exception as e:
             logger.warning(f"Could not add project to file watcher: {e}")
 
-        # Append dependency metadata if available
         db_path = project.get("database_path")
-        for meta_key in ["direct_deps_count", "direct_deps_indexed", "full_deps_count", "full_deps_indexed"]:
-            val = get_project_metadata(db_path, meta_key)
-            if val is not None:
-                if meta_key.endswith("_count"):
-                    try:
-                        project[meta_key] = int(val)
-                    except ValueError:
-                        project[meta_key] = val
-                elif meta_key.endswith("_indexed"):
-                    project[meta_key] = int(val) if val.isdigit() else val
+        _add_dependency_metadata(project, db_path)
         return JSONResponse(project)
     except ValueError as e:
         logger.warning(f"Validation error creating project: {e}")
@@ -137,29 +129,13 @@ def api_get_project(project_id: str):
         else:
             project["indexing_stats"] = {"file_count": 0, "embedding_count": 0, "total_files": 0, "is_indexed": False}
 
-        # Append dependency metadata if available
-        for meta_key in ["direct_deps_count", "direct_deps_indexed", "full_deps_count", "full_deps_indexed"]:
-            val = get_project_metadata(db_path, meta_key)
-            if val is not None:
-                # Convert numeric strings to int where appropriate
-                if meta_key.endswith("_count"):
-                    try:
-                        project[meta_key] = int(val)
-                    except ValueError:
-                        project[meta_key] = val
-                elif meta_key.endswith("_indexed"):
-                    # stored as "0" or "1"
-                    project[meta_key] = int(val) if val.isdigit() else val
+        _add_dependency_metadata(project, db_path)
         return JSONResponse(project)
     except Exception as e:
         logger.exception(f"Error getting project: {e}")
         return JSONResponse({"error": "Failed to retrieve project"}, status_code=500)
 
 
-# New endpoint to retrieve project dependencies (direct only)
-
-
-# New endpoint to index all dependencies (including transitive) for a project
 @router.get("/projects/{project_id}/dependencies", summary="Get project dependencies")
 def api_get_dependencies(project_id: str, request: Request):
     """Return dependencies.
@@ -182,54 +158,42 @@ def api_get_dependencies(project_id: str, request: Request):
         if not project_path or not os.path.isdir(project_path):
             return JSONResponse({"error": "Project path invalid"}, status_code=400)
         include_transitive = request.query_params.get("include_transitive", "false").lower() == "true"
-        # Try to load cached dependencies first
         db_path = project.get("database_path")
         from db.operations import compute_dependency_usage, load_cached_dependencies, load_dependency_usage, store_dependency_usage
 
-        is_transitive_flag = 1 if include_transitive else 0
-        cached = load_cached_dependencies(db_path, project_id, is_transitive_flag)
+        direct_cached = load_cached_dependencies(db_path, project_id, 0)
+        for deps in direct_cached.values():
+            for dep in deps:
+                dep["is_transitive"] = 0
+        transitive_cached = load_cached_dependencies(db_path, project_id, 1) if include_transitive else {}
+        for deps in transitive_cached.values():
+            for dep in deps:
+                dep["is_transitive"] = 1
+        cached = direct_cached
+        for lang, deps in transitive_cached.items():
+            cached.setdefault(lang, []).extend(deps)
         usage = load_dependency_usage(db_path, project_id)
-        # Get total indexed file count for project
         from db.operations import get_project_stats
 
         stats = get_project_stats(db_path)
         if cached:
-            # Merge usage counts into each dependency entry
             for lang, dep_list in cached.items():
                 lang_usage = usage.get(lang, {})
                 for dep in dep_list:
                     dep["file_count"] = lang_usage.get(dep.get("name"), 0)
-            # Compute total dependency count
+                dep_list.sort(key=lambda d: (d.get("is_transitive", 0), d.get("name", "").lower()))
             total_deps = sum(len(v) for v in cached.values())
-            # Attach metadata
             response_body = {"dependencies": cached, "metadata": {"indexed_file_count": stats.get("file_count", 0), "dependency_count": total_deps}}
             return JSONResponse(response_body)
-        # Fallback: compute on the fly (should be rare)
         deps = get_project_dependencies(project_path, include_transitive=include_transitive)
-        # Compute usage counts on the fly
         usage_counts = compute_dependency_usage(db_path, project_path, deps)
-        # Store usage for future requests
         store_dependency_usage(db_path, project_id, usage_counts)
-        # Merge usage into deps
         for lang, dep_list in deps.items():
             lang_usage = usage_counts.get(lang, {})
             for dep in dep_list:
                 dep["file_count"] = lang_usage.get(dep.get("name"), 0)
         total_deps = sum(len(v) for v in deps.values())
         response_body = {"dependencies": deps, "metadata": {"indexed_file_count": stats.get("file_count", 0), "dependency_count": total_deps}}
-        return JSONResponse(response_body)
-        # Fallback: compute on the fly (should be rare)
-        deps = get_project_dependencies(project_path, include_transitive=include_transitive)
-        # Compute usage counts on the fly
-        usage_counts = compute_dependency_usage(db_path, project_path, deps)
-        # Store usage for future requests
-        store_dependency_usage(db_path, project_id, usage_counts)
-        # Merge usage into deps
-        for lang, dep_list in deps.items():
-            lang_usage = usage_counts.get(lang, {})
-            for dep in dep_list:
-                dep["file_count"] = lang_usage.get(dep.get("name"), 0)
-        response_body = {"dependencies": deps, "metadata": {"indexed_file_count": stats.get("file_count", 0)}}
         return JSONResponse(response_body)
     except Exception as e:
         logger.exception(f"Error retrieving dependencies for project {project_id}: {e}")
@@ -238,7 +202,6 @@ def api_get_dependencies(project_id: str, request: Request):
 
 @router.delete("/projects/{project_id}", summary="Delete a project")
 def api_delete_project(project_id: str):
-    # Cancel any active indexing for this project
     if indexing_active.get(project_id):
         indexing_active[project_id] = False
     """
@@ -260,7 +223,6 @@ def api_delete_project(project_id: str):
         return JSONResponse({"error": "Failed to delete project"}, status_code=500)
 
 
-# Global dict to track active indexing tasks per project
 indexing_active: dict[str, bool] = {}
 
 
@@ -289,15 +251,15 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
 
     try:
         project = get_project_by_id(request.project_id)
+        from db.operations import set_project_metadata
+
         if not project:
             return JSONResponse({"error": "Project not found"}, status_code=404)
 
         project_path = project["path"]
         db_path = project["database_path"]
         project_id = project["id"]
-        # Ensure the project's database schema is initialized (in case the DB file was missing or corrupted)
         init_db(db_path)
-        # Reset any existing DBWriter for this DB so it uses the fresh schema
         try:
             from db.db_writer import stop_writer
 
@@ -308,13 +270,11 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
         if not os.path.exists(project_path):
             return JSONResponse({"error": "Project path does not exist"}, status_code=400)
 
-        # If full re-index requested, clear existing data and dependency cache first
         if request.incremental is False:
-            from db.operations import clear_project_data, clear_project_dependencies, set_project_metadata
+            from db.operations import clear_project_data, clear_project_dependencies
 
             clear_project_data(db_path)
             clear_project_dependencies(db_path, project_id)
-            set_project_metadata(db_path, "total_files", "0")
 
         update_project_status(request.project_id, "indexing")
         set_project_metadata(db_path, "direct_deps_count", "0")
@@ -323,10 +283,8 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
         set_project_metadata(db_path, "full_deps_indexed", "0")
 
         venv_path = CFG.get("venv_path")
-        incremental = request.incremental if request.incremental is not None else True
+        incremental = False
 
-        # Full dependencies will be computed inside the callback after they are gathered.
-        # Initialize metadata for full dependencies.
         set_project_metadata(db_path, "full_deps_count", "0")
         set_project_metadata(db_path, "full_deps_indexed", "0")
 
@@ -337,22 +295,18 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
                 from services.dependency_service import get_project_dependencies
                 from services.dependency_usage import compute_and_store_usage
 
-                # Perform the code indexing first
                 analyze_local_path_sync(project_path, db_path, venv_path, MAX_FILE_SIZE, CFG, incremental=incremental)
                 print("Processed project files for indexing")
-                # Check cancellation before proceeding
                 if not indexing_active.get(project_id, False):
                     logger.info(f"Indexing for project {project_id} cancelled after file processing")
                     update_project_status(request.project_id, "error")
                     return
-                # After code indexing, recompute and store direct dependencies (and full if needed)
                 direct_deps = get_project_dependencies(project_path, include_transitive=False)
                 print("Processed direct dependencies")
                 if not indexing_active.get(project_id, False):
                     logger.info(f"Indexing for project {project_id} cancelled after dependency extraction")
                     return
                 store_project_dependencies(db_path, project_id, direct_deps, is_transitive=0)
-                # Sanity‑check: verify rows were inserted
                 try:
                     from db.connection import get_db_connection
 
@@ -360,12 +314,10 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
                     cur = conn.cursor()
                     cur.execute("SELECT COUNT(*) FROM project_dependencies WHERE project_id = ? AND is_transitive = 0", (project_id,))
                     dep_count = cur.fetchone()[0]
-                    logger.debug(f"Inserted {dep_count} direct dependency rows for project {project_id}")
+                    logger.info(f"Inserted {dep_count} direct dependency rows for project {project_id}")
                 finally:
                     conn.close()
-                # Compute and store usage for direct deps
                 compute_and_store_usage(db_path, project_id, direct_deps)
-                # Update direct deps metadata
                 direct_deps_count = sum(len(v) for v in direct_deps.values())
                 set_project_metadata(db_path, "direct_deps_count", str(direct_deps_count))
                 set_project_metadata(db_path, "direct_deps_indexed", "1")
@@ -374,9 +326,7 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
                     if not indexing_active.get(project_id, False):
                         logger.info(f"Indexing for project {project_id} cancelled before full dependency storage")
                         return
-                    # Store full dependencies
                     store_project_dependencies(db_path, project_id, full_deps, is_transitive=1)
-                    # Sanity‑check full dependency rows
                     try:
                         from db.connection import get_db_connection
 
@@ -387,13 +337,10 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
                         logger.debug(f"Inserted {dep_full_count} full dependency rows for project {project_id}")
                     finally:
                         conn_full.close()
-                    # Compute and store usage for full deps
                     compute_and_store_usage(db_path, project_id, full_deps)
-                    # Update full deps metadata
                     full_deps_count = sum(len(v) for v in full_deps.values())
                     set_project_metadata(db_path, "full_deps_count", str(full_deps_count))
                     set_project_metadata(db_path, "full_deps_indexed", "1")
-                # Finalize project status
                 update_project_status(request.project_id, "ready", datetime.utcnow().isoformat())
                 indexing_active[project_id] = False
             except Exception as e:
@@ -401,12 +348,11 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
                 update_project_status(request.project_id, "error")
                 raise
 
-        # Mark indexing as active
         indexing_active[project_id] = True
+        logger.info(f"indexing_active set to True for project {project_id}")
         try:
             background_tasks.add_task(index_callback)
         except TypeError:
-            # Fallback for non‑FastAPI dummy BackgroundTasks used in tests
             index_callback()
 
         indexing_type = "incremental" if incremental else "full"
