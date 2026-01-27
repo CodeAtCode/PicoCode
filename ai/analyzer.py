@@ -277,6 +277,20 @@ def analyze_local_path_sync(
                     line = line.strip()
                     if line and not line.startswith("#"):
                         exclusion_patterns.add(line)
+            # Ensure dependency directories are not excluded, even if listed in .gitignore
+            dep_prefixes = ['.venv', '.venv/', 'venv', 'venv/', 'node_modules', 'node_modules/']
+            filtered = set()
+            for pat in exclusion_patterns:
+                keep = True
+                for dep in dep_prefixes:
+                    if pat == dep or pat.startswith(dep + '/') or pat.startswith(dep + '**'):
+                        keep = False
+                        break
+                if keep:
+                    filtered.add(pat)
+            exclusion_patterns = filtered
+            # Log final exclusion patterns for debugging
+            logger.info(f"Final exclusion patterns: {sorted(exclusion_patterns)}")
         except Exception:
             pass
     import fnmatch
@@ -314,6 +328,9 @@ def analyze_local_path_sync(
     file_paths = project_files + dep_files
     total_files = len(file_paths)
     logger.info(f"Found {total_files} files to index (project files first)")
+    # Debug: list files being processed (always INFO level)
+    for entry in file_paths:
+        logger.info(f"Will process file: {entry['rel']}")
     try:
         from db.operations import set_project_metadata
 

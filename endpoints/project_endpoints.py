@@ -296,7 +296,7 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
                 from services.dependency_usage import compute_and_store_usage
 
                 analyze_local_path_sync(project_path, db_path, venv_path, MAX_FILE_SIZE, CFG, incremental=incremental)
-                print("Processed project files for indexing")
+                print("Processed all files (project + dependencies) for indexing")
                 if not indexing_active.get(project_id, False):
                     logger.info(f"Indexing for project {project_id} cancelled after file processing")
                     update_project_status(request.project_id, "error")
