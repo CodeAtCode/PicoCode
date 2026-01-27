@@ -352,6 +352,17 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
                     logger.info(f"Indexing for project {project_id} cancelled after dependency extraction")
                     return
                 store_project_dependencies(db_path, project_id, direct_deps, is_transitive=0)
+                # Sanity‑check: verify rows were inserted
+                try:
+                    from db.connection import get_db_connection
+
+                    conn = get_db_connection(db_path, timeout=5.0, enable_wal=False)
+                    cur = conn.cursor()
+                    cur.execute("SELECT COUNT(*) FROM project_dependencies WHERE project_id = ? AND is_transitive = 0", (project_id,))
+                    dep_count = cur.fetchone()[0]
+                    logger.debug(f"Inserted {dep_count} direct dependency rows for project {project_id}")
+                finally:
+                    conn.close()
                 # Compute and store usage for direct deps
                 compute_and_store_usage(db_path, project_id, direct_deps)
                 # Update direct deps metadata
@@ -363,13 +374,26 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
                     if not indexing_active.get(project_id, False):
                         logger.info(f"Indexing for project {project_id} cancelled before full dependency storage")
                         return
+                    # Store full dependencies
                     store_project_dependencies(db_path, project_id, full_deps, is_transitive=1)
+                    # Sanity‑check full dependency rows
+                    try:
+                        from db.connection import get_db_connection
+
+                        conn_full = get_db_connection(db_path, timeout=5.0, enable_wal=False)
+                        cur_full = conn_full.cursor()
+                        cur_full.execute("SELECT COUNT(*) FROM project_dependencies WHERE project_id = ? AND is_transitive = 1", (project_id,))
+                        dep_full_count = cur_full.fetchone()[0]
+                        logger.debug(f"Inserted {dep_full_count} full dependency rows for project {project_id}")
+                    finally:
+                        conn_full.close()
                     # Compute and store usage for full deps
                     compute_and_store_usage(db_path, project_id, full_deps)
                     # Update full deps metadata
                     full_deps_count = sum(len(v) for v in full_deps.values())
                     set_project_metadata(db_path, "full_deps_count", str(full_deps_count))
                     set_project_metadata(db_path, "full_deps_indexed", "1")
+                # Finalize project status
                 update_project_status(request.project_id, "ready", datetime.utcnow().isoformat())
                 indexing_active[project_id] = False
             except Exception as e:

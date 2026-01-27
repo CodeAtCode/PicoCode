@@ -1,8 +1,12 @@
 import json
+import logging
 import os
 import re
 import xml.etree.ElementTree as ET
 from typing import Any
+
+# Set up module‑level logger
+logger = logging.getLogger(__name__)
 
 
 def _read_requirements_txt(project_path: str) -> list[dict[str, str]]:
@@ -24,8 +28,8 @@ def _read_requirements_txt(project_path: str) -> list[dict[str, str]]:
                         break
                 else:
                     deps.append({"name": line, "version": ""})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception(f"Failed to read requirements.txt: {e}")
     return deps
 
 
@@ -34,7 +38,12 @@ def _read_pyproject_toml(project_path: str) -> list[dict[str, str]]:
     try:
         import tomli
     except Exception:
-        return []
+        # Fallback to built‑in tomllib for Python 3.11+
+        try:
+            import tomllib as tomli
+        except Exception as e:
+            logger.exception(f"Failed to import TOML parser for Cargo.toml: {e}")
+            return []
     toml_path = os.path.join(project_path, "pyproject.toml")
     if not os.path.isfile(toml_path):
         return []
@@ -83,7 +92,12 @@ def _read_cargo_toml(project_path: str) -> list[dict[str, str]]:
     try:
         import tomli
     except Exception:
-        return []
+        # Fallback to built‑in tomllib for Python 3.11+
+        try:
+            import tomllib as tomli
+        except Exception as e:
+            logger.exception(f"Failed to import TOML parser for Cargo.toml: {e}")
+            return []
     toml_path = os.path.join(project_path, "Cargo.toml")
     if not os.path.isfile(toml_path):
         return []
@@ -113,14 +127,20 @@ def _read_cargo_lock(project_path: str) -> list[dict[str, str]]:
     try:
         import tomli
     except Exception:
-        return []
+        # Fallback to built‑in tomllib for Python 3.11+
+        try:
+            import tomllib as tomli
+        except Exception as e:
+            logger.exception(f"Failed to import TOML parser for Cargo.toml: {e}")
+            return []
     lock_path = os.path.join(project_path, "Cargo.lock")
     if not os.path.isfile(lock_path):
         return []
     try:
         with open(lock_path, "rb") as fh:
             data = tomli.load(fh)
-    except Exception:
+    except Exception as e:
+        logger.exception(f"Failed to parse Cargo.lock: {e}")
         return []
     deps: list[dict[str, str]] = []
     for pkg in data.get("package", []):

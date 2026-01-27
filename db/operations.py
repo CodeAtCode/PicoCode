@@ -349,7 +349,7 @@ def store_project_dependencies(database_path: str, project_id: str, deps: dict, 
                 name = item.get("name")
                 version = item.get("version")
                 cur.execute(
-                    "INSERT INTO project_dependencies (project_id, language, name, version, is_transitive) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO project_dependencies (project_id, language, name, version, is_transitive) VALUES (?, ?, ?, ?, ?)",
                     (project_id, lang, name, version, is_transitive),
                 )
         conn.commit()
