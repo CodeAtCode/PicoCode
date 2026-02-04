@@ -11,6 +11,41 @@ from .db_writer import get_writer
 
 _LOG = get_logger(__name__)
 
+DB_TIMEOUT = 5.0
+DB_RETRY_COUNT = 3
+DB_RETRY_DELAY = 0.1
+
+
+def _execute_query(database_path: str, sql: str, params: tuple = (), fetch: str = "one") -> Any:
+    """
+    Helper to execute a single query with proper connection handling.
+
+    Args:
+        database_path: Path to the database
+        sql: SQL query to execute
+        params: Query parameters
+        fetch: 'one', 'all', or None for no fetch
+
+    Returns:
+        Query result based on fetch parameter
+    """
+    if not os.path.exists(database_path):
+        return None
+
+    conn = get_db_connection(database_path, timeout=DB_TIMEOUT, enable_wal=True)
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        if fetch == "one":
+            return cur.fetchone()
+        elif fetch == "all":
+            return cur.fetchall()
+        else:
+            conn.commit()
+            return cur.lastrowid if sql.strip().upper().startswith("INSERT") else None
+    finally:
+        conn.close()
+
 
 def init_db(database_path: str) -> None:
     """
@@ -130,17 +165,24 @@ def store_file(database_path, path, content, language, last_modified=None, file_
     """
     params = (path, language, snippet, last_modified, file_hash)
 
+    # Initialize database if it doesn't exist
     if not os.path.exists(database_path):
-        return None
+        try:
+            init_db(database_path)
+            _LOG.info(f"Initialized new database: {database_path}")
+        except Exception as e:
+            _LOG.error(f"Failed to initialize database {database_path}: {e}")
+            return None
+
     writer = get_writer(database_path)
     try:
         rowid = writer.enqueue_and_wait(sql, params, wait_timeout=60.0)
     except Exception as e:
-        if "no such table" in str(e):
+        if "no such table" in str(e).lower():
             try:
                 init_db(database_path)
                 rowid = writer.enqueue_and_wait(sql, params, wait_timeout=300.0)
-                _LOG.info(f"store_file succeeded after re‑initialising DB {database_path}")
+                _LOG.info(f"store_file succeeded after re-initializing DB {database_path}")
                 return rowid
             except Exception as e2:
                 _LOG.error(f"store_file retry failed for {database_path}: {e2}")
@@ -155,7 +197,6 @@ def store_file(database_path, path, content, language, last_modified=None, file_
 
 
 def get_project_stats(database_path: str) -> dict[str, Any]:
-    pass
     """
     Get statistics for a project database.
     Returns file_count and embedding_count.
@@ -166,22 +207,12 @@ def get_project_stats(database_path: str) -> dict[str, Any]:
     if cached is not None:
         return cached
 
-    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
-    try:
-        cur = conn.cursor()
+    files_row = _execute_query(database_path, "SELECT COUNT(*) FROM files")
+    chunks_row = _execute_query(database_path, "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
 
-        cur.execute("SELECT COUNT(*) FROM files")
-        file_count = cur.fetchone()[0]
-
-        cur.execute("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
-        embedding_count = cur.fetchone()[0]
-
-        stats = {"file_count": int(file_count), "embedding_count": int(embedding_count)}
-
-        stats_cache.set(cache_key, stats)
-        return stats
-    finally:
-        conn.close()
+    stats = {"file_count": int(files_row[0]) if files_row else 0, "embedding_count": int(chunks_row[0]) if chunks_row else 0}
+    stats_cache.set(cache_key, stats)
+    return stats
 
 
 def get_file_by_path(database_path: str, path: str) -> dict[str, Any] | None:
@@ -189,19 +220,10 @@ def get_file_by_path(database_path: str, path: str) -> dict[str, Any] | None:
     Get file metadata by path for incremental indexing checks.
     Returns None if file doesn't exist or the database/table is missing.
     """
-    if not os.path.exists(database_path):
-        return None
-    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
-    try:
-        try:
-            row = conn.execute("SELECT id, path, last_modified, file_hash FROM files WHERE path = ?", (path,)).fetchone()
-        except Exception:
-            return None
-        if row:
-            return {"id": row["id"], "path": row["path"], "last_modified": row["last_modified"], "file_hash": row["file_hash"]}
-        return None
-    finally:
-        conn.close()
+    row = _execute_query(database_path, "SELECT id, path, last_modified, file_hash FROM files WHERE path = ?", (path,))
+    if row:
+        return {"id": row["id"], "path": row["path"], "last_modified": row["last_modified"], "file_hash": row["file_hash"]}
+    return None
 
 
 def needs_reindex(database_path: str, path: str, current_mtime: float, current_hash: str) -> bool:
@@ -477,12 +499,8 @@ def get_project_metadata(database_path: str, key: str) -> str | None:
     """
     Get a project metadata value by key.
     """
-    conn = get_db_connection(database_path, timeout=5.0, enable_wal=True)
-    try:
-        row = conn.execute("SELECT value FROM project_metadata WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else None
-    finally:
-        conn.close()
+    row = _execute_query(database_path, "SELECT value FROM project_metadata WHERE key = ?", (key,))
+    return row["value"] if row else None
 
 
 PROJECTS_DIR = os.path.expanduser("~/.picocode/projects")

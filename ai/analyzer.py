@@ -173,8 +173,12 @@ def _process_file_sync(
     except Exception:
         logger.exception("Failed to store file %s", rel_path)
         return {"stored": False, "embedded": False, "skipped": False}
-        _ = Document(text=content, extra_info={"path": rel_path, "lang": lang})
 
+    if not fid:
+        logger.error(f"store_file returned None for {rel_path}")
+        return {"stored": False, "embedded": False, "skipped": False}
+
+    try:
         parser = SimpleNodeParser(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         doc_obj = Document(text=content, extra_info={"path": rel_path, "lang": lang})
         nodes = parser.get_nodes_from_documents([doc_obj])
@@ -182,10 +186,7 @@ def _process_file_sync(
         if not chunks:
             chunks = [content]
 
-        _ = SimpleVectorStore()
-
         embedded_any = False
-
         chunk_tasks = []
         for idx, chunk in enumerate(chunks):
             chunk_doc = Document(text=chunk, extra_info={"path": rel_path, "lang": lang, "chunk_index": idx, "chunk_count": len(chunks)})
@@ -193,8 +194,8 @@ def _process_file_sync(
 
         for batch_start in range(0, len(chunk_tasks), EMBEDDING_BATCH_SIZE):
             batch = chunk_tasks[batch_start : batch_start + EMBEDDING_BATCH_SIZE]
-
             batch_texts = [chunk_doc.text for _, chunk_doc in batch]
+
             try:
                 batch_embeddings = _embedding_client._get_text_embeddings(batch_texts)
             except Exception as e:
@@ -223,7 +224,7 @@ def _process_file_sync(
         return {"stored": True, "embedded": embedded_any, "skipped": False}
     except Exception:
         logger.exception("Failed to process file %s", rel_path)
-        return {"stored": False, "embedded": False, "skipped": False}
+        return {"stored": True, "embedded": False, "skipped": False}
 
 
 def analyze_local_path_sync(
@@ -278,12 +279,12 @@ def analyze_local_path_sync(
                     if line and not line.startswith("#"):
                         exclusion_patterns.add(line)
             # Ensure dependency directories are not excluded, even if listed in .gitignore
-            dep_prefixes = ['.venv', '.venv/', 'venv', 'venv/', 'node_modules', 'node_modules/']
+            dep_prefixes = [".venv", ".venv/", "venv", "venv/", "node_modules", "node_modules/"]
             filtered = set()
             for pat in exclusion_patterns:
                 keep = True
                 for dep in dep_prefixes:
-                    if pat == dep or pat.startswith(dep + '/') or pat.startswith(dep + '**'):
+                    if pat == dep or pat.startswith(dep + "/") or pat.startswith(dep + "**"):
                         keep = False
                         break
                 if keep:

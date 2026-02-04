@@ -253,6 +253,15 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> str | 
     from .connection import db_connection
     from .operations import get_project_metadata
 
+    # Cache project path (fetched once per call, cached globally if needed)
+    project_path = get_project_metadata(database_path, "project_path")
+    if not project_path:
+        logger.error("Project path not found in metadata, cannot read file from filesystem")
+        raise RuntimeError("Project path metadata is missing - ensure the indexing process has stored project metadata properly")
+
+    # Normalize project path once
+    normalized_project_path = os.path.abspath(os.path.realpath(project_path))
+
     with db_connection(database_path) as conn:
         cur = conn.cursor()
         cur.execute("SELECT path FROM files WHERE id = ?", (file_id,))
@@ -266,21 +275,12 @@ def get_chunk_text(database_path: str, file_id: int, chunk_index: int) -> str | 
             logger.warning(f"File path is empty for file_id={file_id}")
             return None
 
-        project_path = get_project_metadata(database_path, "project_path")
-        if not project_path:
-            logger.error("Project path not found in metadata, cannot read file from filesystem")
-            raise RuntimeError("Project path metadata is missing - ensure the indexing process has stored project metadata properly")
-
         full_path = os.path.abspath(os.path.realpath(os.path.join(project_path, file_path)))
-        normalized_project_path = os.path.abspath(os.path.realpath(project_path))
 
+        # Single path traversal check (both conditions in one validation)
         try:
-            common = os.path.commonpath([full_path, normalized_project_path])
-            if common != normalized_project_path:
+            if os.path.commonpath([full_path, normalized_project_path]) != normalized_project_path:
                 logger.error(f"Path traversal attempt detected: {file_path} resolves outside project directory")
-                return None
-            if full_path != normalized_project_path and not full_path.startswith(normalized_project_path + os.sep):
-                logger.error(f"Path traversal attempt detected: {file_path} does not start with project directory")
                 return None
         except ValueError:
             logger.error(f"Path traversal attempt detected: {file_path} is on a different drive or incompatible path")

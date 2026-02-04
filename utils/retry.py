@@ -74,6 +74,7 @@ def retry_on_exception(
 def retry_on_db_locked(max_retries: int = 3, base_delay: float = 0.1):
     """
     Specialized retry decorator for database locked errors.
+    Wrapper around retry_on_exception with sqlite3.OperationalError filter.
 
     Args:
         max_retries: Maximum number of retry attempts
@@ -81,21 +82,12 @@ def retry_on_db_locked(max_retries: int = 3, base_delay: float = 0.1):
 
     Returns:
         Decorated function that retries on database locked errors
-
-    Example:
-        @retry_on_db_locked(max_retries=5)
-        def update_metadata(db_path, key, value):
-            with db_connection(db_path) as conn:
-                conn.execute("UPDATE metadata SET value=? WHERE key=?", (value, key))
-                conn.commit()
     """
     import sqlite3
 
     def is_db_locked(e: Exception) -> bool:
         """Check if exception is a database locked error."""
-        if isinstance(e, sqlite3.OperationalError):
-            return "database is locked" in str(e).lower()
-        return False
+        return isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e).lower()
 
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
@@ -115,9 +107,7 @@ def retry_on_db_locked(max_retries: int = 3, base_delay: float = 0.1):
                         raise
 
                     delay = base_delay * (2**attempt)
-
                     logger.warning(f"Database locked, retry {attempt + 1}/{max_retries} for {func.__name__} after {delay:.3f}s")
-
                     time.sleep(delay)
 
             if last_exception:

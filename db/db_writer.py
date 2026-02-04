@@ -34,8 +34,20 @@ class DBWriter:
         _LOG.info(f"DBWriter started for database: {database_path} with {self._num_workers} worker(s)")
 
     def _open_conn(self):
+        # Ensure parent directory exists
+        db_dir = os.path.dirname(self.database_path)
+        if db_dir and not os.path.exists(db_dir):
+            try:
+                os.makedirs(db_dir, exist_ok=True)
+            except Exception as e:
+                _LOG.warning(f"Could not create database directory: {e}")
+
         conn = sqlite3.connect(self.database_path, timeout=self._timeout_seconds, check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL;")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        except sqlite3.OperationalError as e:
+            # WAL mode may not work on all filesystems (e.g., tmpfs, NFS)
+            _LOG.warning(f"Could not enable WAL mode (continuing without): {e}")
         conn.execute("PRAGMA busy_timeout = 30000;")
         conn.execute("PRAGMA synchronous = NORMAL;")
         _LOG.debug(f"Database connection opened for: {self.database_path}")
@@ -44,6 +56,27 @@ class DBWriter:
     def _worker(self):
         conn = None
         try:
+            # Check if database file exists before trying to connect
+            if not os.path.exists(self.database_path):
+                # Wait briefly to see if database is being created
+                import time
+
+                time.sleep(0.5)
+                if not os.path.exists(self.database_path):
+                    _LOG.warning(f"Database does not exist, worker stopping: {self.database_path}")
+                    # Process remaining tasks with error
+                    while not self._stop.is_set():
+                        try:
+                            task = self._q.get(timeout=0.1)
+                            if task is None:
+                                break
+                            task.exception = sqlite3.OperationalError(f"Database does not exist: {self.database_path}")
+                            task.event.set()
+                            self._q.task_done()
+                        except queue.Empty:
+                            continue
+                    return
+
             conn = self._open_conn()
             cur = conn.cursor()
             while not self._stop.is_set():
@@ -52,6 +85,12 @@ class DBWriter:
                 except queue.Empty:
                     continue
                 if task is None:
+                    break
+                if not os.path.exists(self.database_path):
+                    # Database was deleted while running
+                    task.exception = sqlite3.OperationalError(f"Database was deleted: {self.database_path}")
+                    task.event.set()
+                    self._q.task_done()
                     break
                 try:
                     cur.execute(task.sql, task.params)
@@ -140,15 +179,6 @@ def stop_writer(database_path: str, wait: bool = True):
 
 
 def stop_all_writers():
-    """Stop all DBWriter threads (called automatically at process exit)."""
-    with _WRITERS_LOCK:
-        writers = list(_WRITERS.values())
-        _WRITERS.clear()
-    for w in writers:
-        try:
-            w.stop(wait=True)
-        except Exception:
-            _LOG.exception("Error stopping DBWriter")
     """Stop all DBWriter threads (called automatically at process exit)."""
     with _WRITERS_LOCK:
         writers = list(_WRITERS.values())

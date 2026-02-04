@@ -7,14 +7,29 @@ import sys
 
 from utils.config import CFG
 
-logging.basicConfig(
-    level=logging.DEBUG if CFG.get("debug") else logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler(sys.stdout)]
-)
+# Track whether logging has been configured
+_logging_configured = False
 
-if CFG.get("debug"):
-    logging.getLogger("llama_index").setLevel(logging.INFO)
-    logging.getLogger("openai").setLevel(logging.INFO)
-    logging.getLogger("httpcore").setLevel(logging.INFO)
+
+def setup_logging() -> None:
+    """
+    Configure logging for the application.
+    Should be called once at startup, not during module import.
+    """
+    global _logging_configured
+    if _logging_configured:
+        return
+
+    logging.basicConfig(
+        level=logging.DEBUG if CFG.get("debug") else logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler(sys.stdout)]
+    )
+
+    if CFG.get("debug"):
+        logging.getLogger("llama_index").setLevel(logging.INFO)
+        logging.getLogger("openai").setLevel(logging.INFO)
+        logging.getLogger("httpcore").setLevel(logging.INFO)
+
+    _logging_configured = True
 
 
 def get_logger(name: str) -> logging.Logger:
