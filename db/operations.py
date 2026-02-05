@@ -162,6 +162,7 @@ def store_file(database_path, path, content, language, last_modified=None, file_
         last_modified=excluded.last_modified,
         file_hash=excluded.file_hash,
         updated_at=datetime('now')
+    RETURNING id
     """
     params = (path, language, snippet, last_modified, file_hash)
 

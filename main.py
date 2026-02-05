@@ -27,6 +27,16 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Ensure NLTK data is available at startup
+try:
+    import nltk
+
+    nltk.download("punkt", quiet=True)
+    nltk.download("stopwords", quiet=True)
+    logger.info("NLTK data downloaded successfully")
+except Exception as e:
+    logger.warning(f"Failed to download NLTK data: {e}")
+
 MAX_FILE_SIZE = int(CFG.get("max_file_size", 200000))
 
 _file_watcher = None

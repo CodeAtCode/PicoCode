@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,35 @@ from .llama_embeddings import OpenAICompatibleEmbedding
 from .openai import call_coding_api
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def compute_file_hash(file_path: str) -> str:
+    """Compute MD5 hash of a file for change detection."""
+    import hashlib
+
+    try:
+        with open(file_path, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except Exception:
+        return ""
+
+
+EXCLUDE_DIRS = {
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".tox",
+    ".idea",
+    ".vscode",
+    "dist",
+    "build",
+    ".eggs",
+    "*.egg-info",
+}
 
 EXT_LANG = {
     ".py": "python",
@@ -62,6 +92,34 @@ _FILE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_FILE_EXECUTO
 _EMBEDDING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=_EMBEDDING_EXECUTOR_WORKERS)
 
 logger = get_logger(__name__)
+
+
+def _should_index_file(rel_path: str, max_file_size: int) -> bool:
+    """
+    Check if a file should be indexed based on extension and size.
+
+    Args:
+        rel_path: Relative path of the file
+        max_file_size: Maximum file size in bytes
+
+    Returns:
+        True if file should be indexed, False otherwise
+    """
+    # Check file extension
+    ext = os.path.splitext(rel_path)[1].lower()
+    filename = os.path.basename(rel_path)
+
+    # Support both by extension and by filename
+    if ext not in EXT_LANG and filename not in EXT_LANG:
+        return False
+
+    # Check excluded directories
+    for excluded in EXCLUDE_DIRS:
+        if excluded in rel_path:
+            return False
+
+    return True
+
 
 try:
     _embedding_client = OpenAICompatibleEmbedding()
@@ -130,43 +188,34 @@ def _process_file_sync(
     database_path: str,
     full_path: str,
     rel_path: str,
-    cfg: dict[str, Any] | None,
-    incremental: bool = True,
-    file_num: int = 0,
-    total_files: int = 0,
-):
+    cfg: dict,
+    incremental: bool = False,
+) -> dict:
     """
-    Synchronous implementation of per-file processing.
-    Intended to run on a ThreadPoolExecutor worker thread.
-    Returns a dict: {"stored": bool, "embedded": bool, "skipped": bool}
+    Process a single file: store metadata, chunk, embed, and persist chunks/vectors.
+    """
+    from llama_index.core import Document
+    from llama_index.core.node_parser import SimpleNodeParser
+    from db.connection import db_connection
+    from db.vector_operations import insert_chunk_vector_with_retry
+    from db.operations import store_file
+    from .llama_embeddings import OpenAICompatibleEmbedding
 
-    Args:
-        file_num: The current file number being processed (1-indexed)
-        total_files: Total number of files to process
-    """
-    # Previously skipped .venv and node_modules directories; now we process them so that dependency files are indexed.
-    # if ".venv/" in rel_path or "node_modules/" in rel_path:
-    #     return {"stored": False, "embedded": False, "skipped": True}
+    start_time = time.time()
+
     try:
         with open(full_path, encoding="utf-8", errors="ignore") as fh:
             content = fh.read()
-            mtime = os.path.getmtime(full_path)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to read file {full_path}: {e}")
         return {"stored": False, "embedded": False, "skipped": False}
 
     if not content:
-        return {"stored": False, "embedded": False, "skipped": False}
+        return {"stored": False, "embedded": False, "skipped": True}
 
     lang = detect_language(rel_path)
-    if lang == "text":
-        return {"stored": False, "embedded": False, "skipped": False}
-
-    import hashlib
-
-    file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-    if incremental and not needs_reindex(database_path, rel_path, mtime, file_hash):
-        return {"stored": False, "embedded": False, "skipped": True}
+    mtime = os.path.getmtime(full_path)
+    file_hash = compute_file_hash(full_path)
 
     try:
         fid = store_file(database_path, rel_path, content, lang, mtime, file_hash)
@@ -175,7 +224,7 @@ def _process_file_sync(
         return {"stored": False, "embedded": False, "skipped": False}
 
     if not fid:
-        logger.error(f"store_file returned None for {rel_path}")
+        logger.error(f"Database error while storing file (file_id is None): {rel_path}")
         return {"stored": False, "embedded": False, "skipped": False}
 
     try:
@@ -202,26 +251,24 @@ def _process_file_sync(
                 logger.exception("Batch embedding generation failed for %s: %s", rel_path, e)
                 batch_embeddings = [None] * len(batch_texts)
 
-            saved_count = 0
-            failed_count = 0
             for (idx, _chunk_doc), emb in zip(batch, batch_embeddings, strict=True):
                 if emb:
-                    from db.connection import db_connection
-                    from db.vector_operations import insert_chunk_vector_with_retry
-
                     try:
                         with db_connection(database_path) as conn:
                             insert_chunk_vector_with_retry(conn, fid, rel_path, idx, emb)
-                        saved_count += 1
                         embedded_any = True
                     except Exception as e:
-                        failed_count += 1
                         logger.error(f"Failed to insert embedding into DB for {rel_path} chunk {idx}: {e}")
                 else:
-                    failed_count += 1
                     logger.error(f"Embedding missing for {rel_path} chunk {idx}")
 
         return {"stored": True, "embedded": embedded_any, "skipped": False}
+    except AttributeError as e:
+        if "nltk" in str(e).lower() or "punkt" in str(e).lower() or "stopwords" in str(e).lower():
+            logger.error(f"NLTK data missing for {rel_path}. Please run: python3 -c \"import nltk; nltk.download('punkt'); nltk.download('stopwords')\"")
+        else:
+            logger.exception("Failed to process file %s", rel_path)
+        return {"stored": True, "embedded": False, "skipped": False}
     except Exception:
         logger.exception("Failed to process file %s", rel_path)
         return {"stored": True, "embedded": False, "skipped": False}
@@ -233,90 +280,49 @@ def analyze_local_path_sync(
     venv_path: str | None = None,
     max_file_size: int = 200000,
     cfg: dict | None = None,
-    incremental: bool = True,
-    exclude_paths: list[str] | None = None,
-):
+    incremental: bool = False,
+) -> tuple:
     """
-    Simplified indexing pipeline using LlamaIndex ingestion.
-    Collects Document objects for each source file and builds a VectorStoreIndex.
+    Synchronous version to analyze and index a local path.
+
+    Args:
+        local_path: Root path to analyze
+        database_path: SQLite database path for storing metadata and embeddings
+        venv_path: Path to virtual environment (optional)
+        max_file_size: Maximum file size to process
+        cfg: Configuration dictionary
+        incremental: Whether to perform incremental indexing
+
+    Returns:
+        Tuple of (index, excluded_paths)
     """
-    from llama_index.core import Document, VectorStoreIndex
-    from llama_index.core.node_parser import SimpleNodeParser
-
-    from db.operations import set_project_metadata
-
-    from .llama_embeddings import OpenAICompatibleEmbedding
+    import time
 
     start_time = time.time()
+    logger.info(f"Starting synchronous analysis of {local_path}")
 
-    try:
-        set_project_metadata(database_path, "project_path", local_path)
-    except Exception as e:
-        logger.warning(f"Failed to store project path metadata: {e}")
+    # Reuse the existing implementation from analyze_local_path_background
+    # but adapted for synchronous execution
+    from llama_index.core import Document, VectorStoreIndex
+    from llama_index.core.node_parser import SimpleNodeParser
+    from llama_index.core.vector_stores.simple import SimpleVectorStore
+    from ai.llama_embeddings import OpenAICompatibleEmbedding
+    from db.operations import set_project_metadata, store_file
+    import json
 
-    logger.info("Collecting files to index...")
-    file_paths: list[dict[str, str]] = []
-    raw_file_paths: list[dict[str, str]] = []
-    for root, _, files in os.walk(local_path):
-        for fname in files:
-            full = os.path.join(root, fname)
-            rel = os.path.relpath(full, local_path)
-            try:
-                if os.path.getsize(full) > max_file_size:
-                    continue
-            except Exception:
-                continue
-            raw_file_paths.append({"full": full, "rel": rel})
-    exclusion_patterns: set[str] = {".git", "*.gitignore", "*_cache", "LICENSE*", "*pre-commit*"}
-    if exclude_paths:
-        exclusion_patterns.update(set(exclude_paths))
-    gitignore_path = os.path.join(local_path, ".gitignore")
-    if os.path.isfile(gitignore_path):
-        try:
-            with open(gitignore_path, encoding="utf-8", errors="ignore") as gi:
-                for line in gi:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        exclusion_patterns.add(line)
-            # Ensure dependency directories are not excluded, even if listed in .gitignore
-            dep_prefixes = [".venv", ".venv/", "venv", "venv/", "node_modules", "node_modules/"]
-            filtered = set()
-            for pat in exclusion_patterns:
-                keep = True
-                for dep in dep_prefixes:
-                    if pat == dep or pat.startswith(dep + "/") or pat.startswith(dep + "**"):
-                        keep = False
-                        break
-                if keep:
-                    filtered.add(pat)
-            exclusion_patterns = filtered
-            # Log final exclusion patterns for debugging
-            logger.info(f"Final exclusion patterns: {sorted(exclusion_patterns)}")
-        except Exception:
-            pass
-    import fnmatch
-
-    def is_excluded(rel_path: str) -> bool:
-        rel_path_norm = rel_path.replace(os.sep, "/")
-        for pattern in exclusion_patterns:
-            if pattern.endswith("/"):
-                if rel_path_norm.startswith(pattern):
-                    return True
-            if fnmatch.fnmatch(rel_path_norm, pattern) or fnmatch.fnmatch(os.path.basename(rel_path_norm), pattern):
-                return True
-            if pattern in rel_path_norm:
-                return True
-        return False
-
+    excluded_paths = []
     file_paths = []
-    excluded_paths: list[str] = []
-    for entry in raw_file_paths:
-        rel_path = entry["rel"].replace(os.sep, "/")
-        if is_excluded(rel_path):
-            excluded_paths.append(rel_path)
-            continue
-        file_paths.append(entry)
+    local_path = str(Path(local_path).resolve())
 
+    for root, dirs, files in os.walk(local_path):
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        for f in files:
+            full = os.path.join(root, f)
+            rel = os.path.relpath(full, local_path).replace(os.sep, "/")
+            if _should_index_file(rel, max_file_size):
+                file_paths.append({"full": full, "rel": rel})
+
+    # Separate project files from dependencies
     project_files = []
     dep_files = []
     for entry in file_paths:
@@ -326,31 +332,54 @@ def analyze_local_path_sync(
                 dep_files.append(entry)
             else:
                 project_files.append(entry)
-    file_paths = project_files + dep_files
+
+    # By default, only index project files
+    file_paths = project_files
     total_files = len(file_paths)
-    logger.info(f"Found {total_files} files to index (project files first)")
-    # Debug: list files being processed (always INFO level)
-    for entry in file_paths:
-        logger.info(f"Will process file: {entry['rel']}")
-    try:
-        from db.operations import set_project_metadata
+    logger.info(f"Found {total_files} files to index (project files only)")
 
-        set_project_metadata(database_path, "total_files", str(total_files))
-    except Exception as e:
-        logger.warning(f"Failed to store early total_files metadata: {e}")
-
+    # Process files in parallel using ThreadPoolExecutor
     semaphore = threading.Semaphore(EMBEDDING_CONCURRENCY)
-    for f in file_paths:
-        _process_file_sync(
-            semaphore,
-            database_path,
-            f["full"],
-            f["rel"],
-            cfg,
-            incremental=incremental,
-        )
+    batch_size = 10
+    total_processed = 0
 
-    logger.info(f"Completed processing {total_files} files for embedding")
+    def process_file_batch(file_batch):
+        """Process a batch of files."""
+        results = []
+        for f in file_batch:
+            try:
+                result = _process_file_sync(
+                    semaphore,
+                    database_path,
+                    f["full"],
+                    f["rel"],
+                    cfg or {},
+                    incremental=incremental,
+                )
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Failed to process {f['rel']}: {e}")
+                results.append(None)
+        return results
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = []
+        for i in range(0, len(file_paths), batch_size):
+            batch = file_paths[i : i + batch_size]
+            future = executor.submit(process_file_batch, batch)
+            futures.append(future)
+
+        for future in as_completed(futures):
+            try:
+                results = future.result()
+                total_processed += len([r for r in results if r is not None])
+                logger.info(f"Processed {total_processed}/{total_files} files")
+            except Exception as e:
+                logger.error(f"Batch processing error: {e}")
+
+    logger.info(f"Completed processing {total_processed} files for embedding")
+
+    # Create documents for indexing
     documents: list[Document] = []
     for f in file_paths:
         try:
@@ -376,6 +405,7 @@ def analyze_local_path_sync(
 
     duration = time.time() - start_time
     logger.info(f"Indexing completed: {len(documents)} documents indexed in {duration:.2f}s")
+
     try:
         from db.operations import set_project_metadata_batch
 
@@ -390,16 +420,6 @@ def analyze_local_path_sync(
         )
     except Exception:
         logger.exception("Failed to store indexing metadata")
-
-    try:
-        store_file(
-            database_path,
-            "uv_detected.json",
-            json.dumps(local_path, indent=2),
-            "meta",
-        )
-    except Exception:
-        pass
 
     return index, excluded_paths
 
@@ -458,3 +478,105 @@ def search_semantic(query: str, database_path: str, top_k: int = 5):
 def call_coding_model(prompt: str, context: str = ""):
     combined = f"Context:\n{context}\n\nPrompt:\n{prompt}" if context else prompt
     return call_coding_api(combined)
+
+
+def analyze_dependencies_sync(
+    local_path: str,
+    database_path: str,
+    venv_path: str | None,
+    max_file_size: int,
+    cfg: dict,
+    incremental: bool = False,
+) -> None:
+    """
+    Index direct dependencies (Phase 2).
+    This should be called after analyze_local_path_sync completes.
+    Only indexes files in .venv/ and node_modules/ directories.
+
+    Args:
+        local_path: Root path of the project (used to find dependency directories)
+        database_path: Path to the SQLite database
+        venv_path: Path to virtual environment (if applicable)
+        max_file_size: Maximum file size to process
+        cfg: Configuration dictionary
+        incremental: Whether to perform incremental indexing
+    """
+    import time
+
+    start_time = time.time()
+    logger.info(f"Starting Phase 2: Indexing direct dependencies for {local_path}")
+
+    # Collect dependency files only
+    file_paths = []
+
+    # Python dependencies in .venv
+    if venv_path and os.path.exists(venv_path):
+        for root, dirs, files in os.walk(venv_path):
+            # Skip non-essential directories
+            dirs[:] = [d for d in dirs if d not in {"__pycache__", ".git", "test", "tests"}]
+            for f in files:
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, local_path).replace(os.sep, "/")
+                if _should_index_file(rel, max_file_size):
+                    file_paths.append({"full": full, "rel": rel})
+
+    # Node.js dependencies
+    node_modules = os.path.join(local_path, "node_modules")
+    if os.path.exists(node_modules):
+        for root, dirs, files in os.walk(node_modules):
+            # Skip non-essential directories
+            dirs[:] = [d for d in dirs if d not in {".git", "test", "tests", "docs"}]
+            for f in files:
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, local_path).replace(os.sep, "/")
+                if _should_index_file(rel, max_file_size):
+                    file_paths.append({"full": full, "rel": rel})
+
+    total_files = len(file_paths)
+    logger.info(f"Found {total_files} dependency files to index")
+
+    if total_files == 0:
+        logger.info("No dependency files to index")
+        return
+
+    # Process files in parallel batches
+    semaphore = threading.Semaphore(EMBEDDING_CONCURRENCY)
+    batch_size = 10
+    total_processed = 0
+
+    def process_file_batch(file_batch):
+        """Process a batch of dependency files."""
+        results = []
+        for f in file_batch:
+            try:
+                result = _process_file_sync(
+                    semaphore,
+                    database_path,
+                    f["full"],
+                    f["rel"],
+                    cfg,
+                    incremental=incremental,
+                )
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Failed to process dependency {f['rel']}: {e}")
+                results.append(None)
+        return results
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = []
+        for i in range(0, len(file_paths), batch_size):
+            batch = file_paths[i : i + batch_size]
+            future = executor.submit(process_file_batch, batch)
+            futures.append(future)
+
+        for future in as_completed(futures):
+            try:
+                results = future.result()
+                total_processed += len([r for r in results if r is not None])
+                logger.info(f"Indexed {total_processed}/{total_files} dependency files")
+            except Exception as e:
+                logger.error(f"Dependency batch processing error: {e}")
+
+    elapsed = time.time() - start_time
+    logger.info(f"Phase 2 complete: Indexed {total_processed}/{total_files} dependency files in {elapsed:.1f}s")

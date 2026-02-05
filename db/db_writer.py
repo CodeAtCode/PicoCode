@@ -94,8 +94,14 @@ class DBWriter:
                     break
                 try:
                     cur.execute(task.sql, task.params)
-                    conn.commit()
-                    task.rowid = cur.lastrowid
+                    # Handle RETURNING clause - must fetch before commit
+                    if "RETURNING" in task.sql.upper():
+                        result = cur.fetchone()
+                        task.rowid = result[0] if result else None
+                        conn.commit()
+                    else:
+                        conn.commit()
+                        task.rowid = cur.lastrowid
                 except Exception as e:
                     task.exception = e
                     try:
@@ -137,10 +143,23 @@ class DBWriter:
         self._q.put(task)
         return task
 
+    def clear_queue(self):
+        """Clear all pending tasks from the queue without processing them."""
+        try:
+            while True:
+                task = self._q.get_nowait()
+                if task is not None:
+                    task.exception = sqlite3.OperationalError("Database deleted - operation cancelled")
+                    task.event.set()
+                self._q.task_done()
+        except queue.Empty:
+            pass
+
     def stop(self, wait=True):
         """Stop all worker threads. If wait=True, block until all threads join."""
         _LOG.info(f"Stopping DBWriter for database: {self.database_path}")
         self._stop.set()
+        self.clear_queue()
         for _ in range(self._num_workers):
             self._q.put(None)
         if wait:

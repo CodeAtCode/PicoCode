@@ -295,8 +295,23 @@ def api_index_project(http_request: Request, request: IndexProjectRequest, backg
                 from services.dependency_service import get_project_dependencies
                 from services.dependency_usage import compute_and_store_usage
 
+                # Phase 1: Index only project files (not dependencies)
                 analyze_local_path_sync(project_path, db_path, venv_path, MAX_FILE_SIZE, CFG, incremental=incremental)
-                print("Processed all files (project + dependencies) for indexing")
+                print("Phase 1 complete: Indexed project files only")
+
+                if not indexing_active.get(project_id, False):
+                    logger.info(f"Indexing for project {project_id} cancelled after project file processing")
+                    update_project_status(request.project_id, "error")
+                    return
+
+                # Phase 2: Index direct dependencies
+                logger.info(f"Starting Phase 2: Indexing direct dependencies for project {project_id}")
+
+                # Index dependency files (only .venv and node_modules)
+                from ai.analyzer import analyze_dependencies_sync
+
+                analyze_dependencies_sync(project_path, db_path, venv_path, MAX_FILE_SIZE, CFG, incremental=incremental)
+                print("Phase 2 complete: Indexed direct dependencies")
                 if not indexing_active.get(project_id, False):
                     logger.info(f"Indexing for project {project_id} cancelled after file processing")
                     update_project_status(request.project_id, "error")
